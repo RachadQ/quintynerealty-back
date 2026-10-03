@@ -34,7 +34,7 @@ def _client() -> httpx.AsyncClient:
     if _external_client is None or _external_client.is_closed:
         _external_client = httpx.AsyncClient(
             follow_redirects=False,
-            headers={"User-Agent": "DevanteAdministration/1.0"},
+            headers={"User-Agent": "QuintyneRealtyIncAdministration/1.0"},
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
         )
     return _external_client
@@ -388,7 +388,7 @@ async def _geocode(client: httpx.AsyncClient, address: str) -> tuple[float, floa
 
 @router.post("/route-distance")
 async def route_distance(payload: RouteRequest, _: dict = Depends(require_permission("RECEIPTS_CREATE"))):
-    headers = {"User-Agent": "DevanteAdministration/1.0 (vehicle trip distance lookup)"}
+    headers = {"User-Agent": "QuintyneRealtyIncAdministration/1.0 (vehicle trip distance lookup)"}
     try:
         async with httpx.AsyncClient(timeout=15, headers=headers, follow_redirects=False) as client:
             start, end = await asyncio.gather(

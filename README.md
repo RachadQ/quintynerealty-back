@@ -1,6 +1,6 @@
-# Devante Backend (MongoDB)
+# Quintyne Realty inc Backend (MongoDB)
 
-FastAPI backend for Devante, with MongoDB Atlas.
+FastAPI backend for Quintyne Realty inc, with MongoDB Atlas.
 
 ## Security
 
@@ -67,7 +67,7 @@ variables were saved with empty values. In Vercel project Settings → Environme
 Variables, populate `MONGODB_URI` (including the database name), `JWT_SECRET` and
 `SESSION_SECRET` (different random secrets, each at least 32 characters),
 `FRONTEND_URL`, `CORS_ALLOWED_ORIGINS`, and `TRUSTED_HOSTS`. Use the frontend HTTPS origin for the frontend and CORS
-values, and `devante-app-back.vercel.app` for this backend's trusted host.
+values, and `api.example.com` for this backend's trusted host.
 Set these for the deployment's environment, then redeploy. Never paste secrets
 into logs or commit them. Blank optional settings use defaults; secure cookies
 default to `true` and SameSite defaults to `lax`. Required settings still fail

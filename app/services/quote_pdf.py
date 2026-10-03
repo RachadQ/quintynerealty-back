@@ -1,4 +1,4 @@
-"""Render a quote or invoice snapshot matching Direct Connections design."""
+"""Render a quote or invoice snapshot matching Quintyne Realty inc design."""
 
 from datetime import datetime
 from decimal import Decimal
@@ -25,7 +25,7 @@ pdfmetrics.registerFontFamily("QuoteRegular", normal="QuoteRegular", bold="Quote
 def render_quote_pdf(quote: dict, job: dict) -> bytes:
     output = BytesIO()
 
-    # Color Palette matching Direct Connections invoice
+    # Color Palette matching Quintyne Realty inc invoice
     primary_blue = colors.HexColor("#1d4ed8")      # Royal blue for INVOICE / QUOTE title & total
     dark_slate = colors.HexColor("#0f172a")        # Dark slate for company name & main text
     muted_text = colors.HexColor("#475569")        # Muted gray for address & details
@@ -78,12 +78,12 @@ def render_quote_pdf(quote: dict, job: dict) -> bytes:
     doc_number_label = "Invoice #" if doc_type_heading == "INVOICE" else "Quote #"
     doc_number_val = str(quote.get("quote_number") or (f"INV{ref_num}" if is_invoice else f"QTE-{ref_num}")).strip()
 
-    company_title = str(quote.get("company_name") or "Direct Connections").strip()
-    contact_name = str(quote.get("contact_name") or "Devante Williams-Morris").strip()
+    company_title = str(quote.get("company_name") or "Quintyne Realty inc").strip()
+    contact_name = str(quote.get("contact_name") or "Quintyne Realty inc").strip()
     tax_number = str(quote.get("tax_number") or "GST/HST #: 707729422RT0001").strip()
     address_line1 = str(quote.get("address_line1") or "906-2301 Derry Road West").strip()
     address_line2 = str(quote.get("address_line2") or "Mississauga, ON, Canada L5N 2R4").strip()
-    contact_phone_email = str(quote.get("contact_phone_email") or "647-836-9906 · Devantetheelectrician@gmail.com").strip()
+    contact_phone_email = str(quote.get("contact_phone_email") or "").strip()
 
     # Printable width = 612 - 80 = 532pt
     doc = SimpleDocTemplate(
@@ -351,7 +351,7 @@ def render_quote_pdf(quote: dict, job: dict) -> bytes:
         canvas.line(40, 24, 572, 24)
         canvas.setFont("QuoteRegular", 7.5)
         canvas.setFillColor(muted_text)
-        canvas.drawString(40, 14, f"Direct Connections · {doc_number_val} · All amounts in CAD")
+        canvas.drawString(40, 14, f"Quintyne Realty inc · {doc_number_val} · All amounts in CAD")
         canvas.drawRightString(572, 14, f"Page {document.page}")
         canvas.restoreState()
 

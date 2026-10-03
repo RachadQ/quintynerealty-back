@@ -47,7 +47,7 @@ async def lifespan(_: FastAPI):
         await close_database()
 
 
-app = FastAPI(title="Devante API", version="1.0.0", lifespan=lifespan,
+app = FastAPI(title="Quintyne Realty inc API", version="1.0.0", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.hosts)
 app.add_middleware(SessionMiddleware, secret_key=settings.session_secret, https_only=settings.session_cookie_secure,

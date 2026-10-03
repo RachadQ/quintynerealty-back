@@ -19,11 +19,11 @@ class Settings(BaseSettings):
     )
 
     app_env: Literal["development", "production"] = "production"
-    service_name: str = "devante-backend"
+    service_name: str = "quintyne-realty-inc-backend"
     mongodb_uri: str
     jwt_secret: str = Field(min_length=32)
     session_secret: str = Field(min_length=32)
-    jwt_issuer: str = "devante-backend"
+    jwt_issuer: str = "quintyne-realty-inc-backend"
     jwt_ttl_minutes: int = Field(default=60, ge=5, le=1440)
     frontend_url: str
     cors_allowed_origins: str

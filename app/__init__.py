@@ -1,2 +1,2 @@
-"""Devante API."""
+"""Quintyne Realty inc API."""
 

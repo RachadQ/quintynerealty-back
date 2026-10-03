@@ -29,7 +29,7 @@ async def connect_database() -> bool:
     )
     try:
         await _client.admin.command("ping")
-        # The database name is part of MONGODB_URI (for example, /devante_app).
+        # The database name is part of MONGODB_URI (for example, /quintyne_realty_inc).
         # Keeping one source of truth prevents connecting to the right cluster
         # while accidentally selecting the wrong database.
         _database = _client.get_default_database()

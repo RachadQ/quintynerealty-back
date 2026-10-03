@@ -1,6 +1,6 @@
 # Backend agent guidance
 
-This FastAPI application serves the Devante React client. It uses MongoDB, signed cookie sessions, Microsoft OAuth, CSRF protection, RBAC, and immutable audit events.
+This FastAPI application serves the Quintyne Realty inc React client. It uses MongoDB, signed cookie sessions, Microsoft OAuth, CSRF protection, RBAC, and immutable audit events.
 
 ## Commands
 
