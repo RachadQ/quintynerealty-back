@@ -42,9 +42,19 @@ async def status(user: dict = Depends(get_current_user)):
     settings = get_settings()
     configured = bool(settings.microsoft_client_id and settings.microsoft_client_secret and settings.microsoft_redirect_uri)
     url = None
-    if configured and user.get('is_super_admin'):
-        url = onedrive.callback_origin() + '/storage/onedrive/connect'
-    return {'configured': configured, 'connected': await onedrive.connected(), 'connect_url': url}
+    configuration_error = None
+    if configured:
+        try:
+            origin = onedrive.callback_origin()
+            onedrive.authority()
+            if user.get('is_super_admin'):
+                url = origin + '/storage/onedrive/connect'
+        except HTTPException as exc:
+            configured = False
+            if user.get('is_super_admin'):
+                configuration_error = exc.detail
+    return {'configured': configured, 'connected': await onedrive.connected(), 'connect_url': url,
+            'configuration_error': configuration_error}
 
 
 @router.get('/storage/onedrive/connect')
