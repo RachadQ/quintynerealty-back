@@ -36,7 +36,7 @@ python scripts/seed_admin.py
 
 MongoDB creates the required collections and indexes during application startup. Use a replica set in production for durability and transactions, TLS-enabled `mongodb+srv://` credentials from a secret manager, network allowlists, encryption at rest, and a least-privilege database user.
 
-Microsoft sign-in has been removed. Google sign-in is planned but is not implemented. Until a replacement is configured, new production sign-ins are unavailable; existing valid sessions still use the same authentication and permission checks. Protected API routes return 401 when no valid session is provided.
+Google sign-in uses Google Identity Services. The backend verifies Google ID tokens and allows only active users already registered in MongoDB. Microsoft authorization is used separately for OneDrive storage.
 
 ## Deploy to Vercel
 
@@ -152,3 +152,14 @@ OneDrive year and month folders use the reviewed receipt date, not the upload da
 Each saved trip updates one app-managed `Trip Log <year>.csv` spreadsheet in `Quintyne Realty/<year>`. CSV opens in Excel. The log includes all non-deleted trips across vehicles and months for that calendar year, with date, vehicle, business/personal type, From, To, kilometres, estimated litres used, notes, and a stable trip ID. The first upload uses a temporary unique filename, then renames the managed file to `Trip Log <year>.csv`. Existing name conflicts are reported without overwriting another file. Later updates reuse the same OneDrive file ID.
 
 The spreadsheet is rebuilt from saved trip records, so retries do not duplicate rows. It is a generated report; make corrections in the app because later syncs replace its contents. If OneDrive is disconnected or an update fails, the trip remains saved and the form shows a retry action. `POST /vehicles/{vehicle_id}/trips/{trip_id}/sync-spreadsheet` retries without creating another trip. Concurrent updates use a shared MongoDB lease. Receipt folders remain organized by year/category/month; each annual trip log stays directly in its year folder.
+
+
+## Google sign-in (Devante flow)
+
+Configure `GOOGLE_OAUTH_CLIENT_ID` with the same public Web client ID used by Devante, or a separate Google OAuth Web client. Google Identity Services renders the sign-in button; no Google client secret is needed for this flow. Add `https://quintynerealty.vercel.app` to the Google client's Authorized JavaScript origins. Add the exact localhost frontend origin when testing locally.
+
+For the deployed backend set `FRONTEND_URL=https://quintynerealty.vercel.app`, `CORS_ALLOWED_ORIGINS=https://quintynerealty.vercel.app`, `AUTH_COOKIE_SECURE=true`, `SESSION_COOKIE_SECURE=true`, and `AUTH_COOKIE_SAMESITE=none`. Set frontend `VITE_API_URL=https://quintynerealty-back.vercel.app`. Redeploy both projects. Cross-site browser cookie restrictions may require same-site custom domains depending on browser policy.
+
+`GET /auth/google/config` supplies the public client ID. `POST /auth/google` accepts the Google credential, validates its signature/audience/expiry with Google's verification library, checks verified email and exact Origin, and permits only active users in the existing users collection. Sign-in issues the app's cookies, returns the CSRF token, and writes login/audit records. Bootstrap/heartbeat return the CSRF token so the frontend can authenticate mutations across origins; heartbeat preserves that token. Google sign-in does not alter the OneDrive connection.
+
+Reference: https://developers.google.com/identity/sign-in/web/backend-auth.

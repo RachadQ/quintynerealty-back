@@ -28,12 +28,13 @@ def create_access_token(user_id: UUID, is_super_admin: bool) -> tuple[str, datet
     return token, expires_at
 
 
-def set_auth_cookies(response: Response, token: str) -> None:
+def set_auth_cookies(response: Response, token: str, csrf: str | None = None) -> str:
     settings = get_settings()
-    csrf = secrets.token_urlsafe(32)
+    csrf = csrf or secrets.token_urlsafe(32)
     common = dict(secure=settings.auth_cookie_secure, samesite=settings.auth_cookie_samesite, path="/")
     response.set_cookie(AUTH_COOKIE_NAME, token, httponly=True, **common)
     response.set_cookie(CSRF_COOKIE_NAME, csrf, httponly=False, **common)
+    return csrf
 
 
 def clear_auth_cookies(response: Response) -> None:
@@ -97,6 +98,8 @@ def require_permission(permission: str) -> Callable:
 
 async def csrf_protect(request: Request) -> None:
     settings = get_settings()
+    if request.method == "POST" and request.url.path == "/auth/google":
+        return  # This endpoint verifies Google identity and checks the exact Origin.
     if settings.dev_auth_bypass:
         return
     if request.method in {"GET", "HEAD", "OPTIONS"} or request.headers.get("authorization", "").startswith("Bearer "):

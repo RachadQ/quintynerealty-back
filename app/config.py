@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     allowed_email_domains: str = ""
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
     ocr_engine: Literal["paddle", "rapid"] = "paddle"
+    google_oauth_client_id: str = ""
     microsoft_client_id: str = ""
     microsoft_client_secret: str = ""
     microsoft_redirect_uri: str = ""
