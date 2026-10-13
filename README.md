@@ -73,7 +73,7 @@ into logs or commit them. Blank optional settings use defaults; secure cookies
 default to `true` and SameSite defaults to `lax`. Required settings still fail
 closed when missing.
 
-## Receipts, RFI, OCR, and Google Drive
+## Receipts, OCR, and Google Drive
 
 ### Deployment size
 
@@ -97,7 +97,7 @@ Receipt and RFI image uploads use lightweight PaddleOCR PP-OCRv5 mobile text det
 
 OCR previews run as durable background jobs. `POST /receipts/preview` returns a job ID immediately, and `GET /receipts/preview/{job_id}` returns `queued`, `processing`, `completed`, or `failed`. Temporary uploads remain in MongoDB GridFS so work survives a browser refresh; they are deleted after confirmation or automatically after one hour.
 
-Without Drive configuration, files are stored under `uploads/Receipts/<year>/<category>` or `uploads/RFI/<year>/<category>`. To use Google Drive:
+Without Drive configuration, files are stored under `uploads/Receipts/<year>/<category>` . To use Google Drive:
 
 1. Create a Google Cloud service account and enable the Google Drive API.
 2. Create a Drive folder and share it with the service account email as an editor.
@@ -117,6 +117,4 @@ Product extraction also reads embedded JSON product records (including Best Buy 
 
 Creating or editing a structured quote automatically generates a PDF containing the job, company, items, quantities, CAD unit prices, line totals, total, and notes. Quote fields and PDF bytes are saved atomically in the same MongoDB document so serverless restarts cannot lose the PDF. JSON responses omit PDF bytes and include `pdf_url`, `pdf_filename`, and `pdf_generated_at` for newly saved quotes. `GET /jobs/{job_id}/quotes/{quote_id}/pdf` requires `JOBS_READ`, downloads the saved PDF, and generates PDFs on demand for older quotes. Deleted jobs or quotes cannot be downloaded. Saves accept up to 500 items and an 8 MB generated PDF. PDF downloads are audited; quote edits retain CSRF and `JOBS_UPDATE` checks.
 
-RFI uploads can include `rfi_number`, `rfi_subject`, `rfi_question`, `rfi_to`, and `rfi_due_at` fields. `GET /receipts/{rfi_id}/responses` lists responses, and `POST /receipts/{rfi_id}/responses` adds a dated answer with a responder name and optional PDF or image attachment. Response files can be opened at `GET /receipts/{rfi_id}/responses/{response_id}/file`. These endpoints verify the parent is an active RFI, require receipt read or update permission, audit added responses, and keep RFIs outside financial totals.
-
-`POST /jobs/{job_id}/rfis` creates a structured RFI from its number, subject, question, recipient, request date, and optional response due date without requiring an uploaded file. Existing RFI scans can still be uploaded through the receipt flow and linked to the job.
+RFI functionality has been removed from the interface and backend endpoints. Existing RFI records and stored files are retained but are excluded from receipt lists and reports.
