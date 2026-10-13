@@ -37,6 +37,10 @@ class Settings(BaseSettings):
     allowed_email_domains: str = ""
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
     ocr_engine: Literal["paddle", "rapid"] = "paddle"
+    microsoft_client_id: str = ""
+    microsoft_client_secret: str = ""
+    microsoft_redirect_uri: str = ""
+    microsoft_tenant_id: str = "common"
     google_drive_credentials_json: str = ""
     google_drive_root_folder_id: str = ""
     local_upload_directory: str = "uploads"

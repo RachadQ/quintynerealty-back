@@ -236,6 +236,25 @@ def suggested_total(text: str) -> float | None:
     return None
 
 
+def suggested_hst(text: str) -> float | None:
+    """Read explicitly labelled HST amounts; never infer tax from a rate/total."""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    label = re.compile(r"\b(?:h\.?s\.?t\.?|harmonized\s+sales\s+tax)\b", re.I)
+    values = []
+    for index, line in enumerate(lines):
+        match = label.search(line)
+        if not match or re.search(r"(?:\b(?:registration|register|reg|number|no)\b|#|\d{9}\s*RT\d{4})", line, re.I):
+            continue
+        tail = line[match.end():]
+        amounts = [m for m in _AMOUNT.finditer(tail) if not re.match(r"\s*%", tail[m.end():])]
+        if amounts:
+            values.append(_parse_amount(amounts[-1].group(1)))
+        elif index + 1 < len(lines) and re.fullmatch(r"\$?\s*\d+[.,]\d{2}", lines[index + 1]):
+            values.append(_parse_amount(lines[index + 1].lstrip('$').strip()))
+    found = {value for value in values if value is not None}
+    return found.pop() if len(found) == 1 else None
+
+
 def suggested_date(text: str) -> date | None:
     patterns = (
         (r"(?<!\d)(\d{4}[./-]\d{1,2}[./-]\d{1,2})(?!\d)", ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d")),
@@ -369,6 +388,7 @@ def suggested_fields(text: str) -> dict[str, object | None]:
     return {
         "suggested_vendor": suggested_vendor(text),
         "suggested_amount": total,
+        "suggested_hst_amount": suggested_hst(text),
         "suggested_date": detected_date.isoformat() if detected_date else None,
         "suggested_category": category,
         "suggested_currency": suggested_currency(text),

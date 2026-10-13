@@ -1,7 +1,9 @@
 import asyncio
+import calendar
 import re
 from contextlib import suppress
 from datetime import date, datetime, time, timedelta, timezone
+from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Literal
@@ -20,7 +22,8 @@ from app.database import get_database
 from app.models import serialize, utcnow
 from app.security import require_permission
 from app.services.drive import DriveStorage
-from app.services.ocr import extract_text, suggested_total, suggested_vendor
+from app.services import onedrive
+from app.services.ocr import extract_text, suggested_total, suggested_vendor, suggested_hst
 from app.services.receipt_jobs import enqueue_preview_job, process_preview_job_by_id
 
 router = APIRouter(prefix="/receipts", tags=["receipts"])
@@ -63,15 +66,23 @@ def _normalize_upload_mime(content_type: str | None, filename: str | None, conte
     return ct
 
 
+BusinessActivity = Literal["vending_machine", "third_party_sales", "rentals", "other"]
+
+
+def _activity_filter(value: str) -> dict:
+    if value == "other":
+        return {"$or": [{"business_activity": {"$in": ["other", "construction", "property_management", "retail"]}}, {"business_activity": None}]}
+    return {"business_activity": value}
+
+
 class ReceiptUpdate(BaseModel):
+    business_activity: BusinessActivity | None = None
     vendor: str | None = Field(default=None, max_length=160)
-    amount: float | None = Field(default=None, ge=0)
+    amount: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    hst_amount: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     category: str | None = None
     transaction_type: str | None = None
     incurred_at: date | None = None
-    link_type: str | None = None
-    link_id: str | None = Field(default=None, max_length=160)
-    link_label: str | None = Field(default=None, max_length=200)
     vehicle_id: UUID | None = None
     fuel_litres: float | None = Field(default=None, gt=0, le=10000, allow_inf_nan=False)
 
@@ -249,29 +260,15 @@ def _safe_filename(filename: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", name)[:180] or "upload"
 
 
-async def _validate_job_link(link_type: str | None, link_id: str | None) -> str | None:
-    if link_type != "job":
-        return link_id
-    if not link_id:
-        raise HTTPException(422, "Select a job for this document")
-    job = await get_database().jobs.find_one({"code": link_id.upper(), "deleted_at": None})
-    if job is None:
-        try:
-            job = await get_database().jobs.find_one({"_id": UUID(link_id), "deleted_at": None})
-        except ValueError:
-            pass
-    if job is None:
-        raise HTTPException(422, "Job not found")
-    return job["code"]
-
-
 @router.post("", status_code=201)
 async def upload_receipt(
     file: UploadFile = File(...), category: str = Form("other"), document_type: str = Form("receipt"),
     transaction_type: str = Form("expense"), incurred_at: date = Form(default_factory=date.today),
     amount: float | None = Form(None), vendor: str | None = Form(None), currency: str = Form("CAD"),
-    link_type: str | None = Form(None), link_id: str | None = Form(None), link_label: str | None = Form(None),
     vehicle_id: UUID | None = Form(None), fuel_litres: float | None = Form(None),
+    hst_amount: float | None = Form(None, ge=0, allow_inf_nan=False),
+    hst_reviewed: bool = Form(False),
+    business_activity: BusinessActivity = Form("other"),
     ocr_text_override: str | None = Form(None),
     actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
@@ -298,10 +295,19 @@ async def upload_receipt(
             ocr_text = ""
     detected_amount = suggested_total(ocr_text)
     detected_vendor = suggested_vendor(ocr_text)
+    recorded_amount = amount if amount is not None else detected_amount
+    recorded_hst = hst_amount if hst_amount is not None else (None if hst_reviewed else suggested_hst(ocr_text))
+    if recorded_hst is not None and recorded_amount is not None and recorded_hst > recorded_amount:
+        raise HTTPException(422, "HST cannot exceed the receipt total")
     year = str(incurred_at.year)
     drive_data: dict[str, str] = {}
     storage_provider = "local"
-    if settings.google_drive_credentials_json and settings.google_drive_root_folder_id:
+    if await onedrive.connected():
+        drive_data = await onedrive.upload(content, filename, mime_type, [year,
+            "Business Expenses" if category == "job_expense" else category.replace("_", " ").title(),
+            f"{incurred_at.month:02d} - {calendar.month_name[incurred_at.month]}"])
+        storage_provider = "onedrive"
+    elif settings.google_drive_credentials_json and settings.google_drive_root_folder_id:
         drive = DriveStorage(settings.google_drive_credentials_json, settings.google_drive_root_folder_id)
         folders = ["Receipts", year, category.replace("_", " ").title()]
         drive_data = await asyncio.to_thread(drive.upload, content, filename, file.content_type, folders)
@@ -316,10 +322,10 @@ async def upload_receipt(
     cleaned_currency = "CAD" if not currency or currency.upper()[:3] == "CHF" else currency.upper()[:3]
     document = {
         "_id": uuid4(), "document_type": document_type, "transaction_type": transaction_type,
-        "category": category, "vendor": vendor or detected_vendor, "amount": amount if amount is not None else detected_amount,
+        "business_activity": business_activity,
+        "category": category, "vendor": vendor or detected_vendor, "amount": recorded_amount, "hst_amount": round(recorded_hst, 2) if recorded_hst is not None else None,
         "currency": cleaned_currency, "incurred_at": datetime.combine(incurred_at, time.min, tzinfo=timezone.utc),
         "filename": filename, "mime_type": file.content_type, "size_bytes": len(content), "ocr_text": ocr_text,
-        "link_type": link_type or None, "link_id": link_id or None, "link_label": link_label or None,
         "vehicle_id": vehicle_id, "fuel_litres": fuel_litres,
         "storage_provider": storage_provider, **drive_data, "created_by": actor["_id"], "created_at": now,
         "updated_at": now, "deleted_at": None,
@@ -334,8 +340,10 @@ async def upload_receipt_from_preview(
     job_id: UUID, category: str = Form("other"), document_type: str = Form("receipt"),
     transaction_type: str = Form("expense"), incurred_at: date = Form(default_factory=date.today),
     amount: float | None = Form(None), vendor: str | None = Form(None), currency: str = Form("CAD"),
-    link_type: str | None = Form(None), link_id: str | None = Form(None), link_label: str | None = Form(None),
     vehicle_id: UUID | None = Form(None), fuel_litres: float | None = Form(None),
+    hst_amount: float | None = Form(None, ge=0, allow_inf_nan=False),
+    hst_reviewed: bool = Form(False),
+    business_activity: BusinessActivity = Form("other"),
     ocr_text_override: str | None = Form(None),
     actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
@@ -362,8 +370,9 @@ async def upload_receipt_from_preview(
         saved = await upload_receipt(
             file=upload, category=category, document_type=document_type,
             transaction_type=transaction_type, incurred_at=incurred_at, amount=amount,
-            vendor=vendor, currency=currency, link_type=link_type, link_id=link_id,
-            link_label=link_label, vehicle_id=vehicle_id, fuel_litres=fuel_litres,
+            vendor=vendor, currency=currency,
+            vehicle_id=vehicle_id, fuel_litres=fuel_litres,
+            business_activity=business_activity, hst_amount=hst_amount, hst_reviewed=hst_reviewed,
             ocr_text_override=reviewed_text, actor=actor,
         )
     except Exception:
@@ -379,9 +388,11 @@ async def upload_receipt_from_preview(
 
 
 @router.get("")
-async def list_receipts(year: int | None = None, category: str | None = None, document_type: str | None = None,
+async def list_receipts(year: int | None = None, category: str | None = None, document_type: str | None = None, business_activity: BusinessActivity | None = None,
                         _: dict = Depends(require_permission("RECEIPTS_READ"))):
     query: dict = {"deleted_at": None, "document_type": "receipt"}
+    if business_activity is not None:
+        query.update(_activity_filter(business_activity))
     if year:
         query["incurred_at"] = {"$gte": datetime(year, 1, 1, tzinfo=timezone.utc), "$lt": datetime(year + 1, 1, 1, tzinfo=timezone.utc)}
     if category:
@@ -418,6 +429,10 @@ async def download_receipt_file(receipt_id: UUID, _: dict = Depends(require_perm
     document = await get_database().receipts.find_one({"_id": receipt_id, "document_type": "receipt", "deleted_at": None})
     if document is None:
         raise HTTPException(404, "Document not found")
+    if document.get("storage_provider") == "onedrive":
+        content = await onedrive.download(document["drive_id"], document["file_id"])
+        return Response(content, media_type=document.get("mime_type") or "application/octet-stream",
+                        headers={"Content-Disposition": 'inline; filename="' + _safe_filename(document.get("filename") or "receipt") + '"', "Cache-Control": "private, no-store"})
     if document.get("storage_provider") == "google_drive" or document.get("web_url"):
         web_url = document.get("web_url")
         if web_url:
@@ -453,18 +468,24 @@ async def download_receipt_file(receipt_id: UUID, _: dict = Depends(require_perm
 @router.patch("/{receipt_id}")
 async def update_receipt(receipt_id: UUID, payload: ReceiptUpdate, actor: dict = Depends(require_permission("RECEIPTS_UPDATE"))):
     changes = payload.model_dump(exclude_none=True)
-    if "link_type" in changes or "link_id" in changes:
-        current = await get_database().receipts.find_one({"_id": receipt_id, "document_type": "receipt", "deleted_at": None})
-        if not current:
-            raise HTTPException(404, "Receipt not found")
-        changes["link_id"] = await _validate_job_link(changes.get("link_type", current.get("link_type")),
-                                                      changes.get("link_id", current.get("link_id")))
+    if "hst_amount" in payload.model_fields_set:
+        changes["hst_amount"] = payload.hst_amount
     if "category" in changes and changes["category"] not in CATEGORIES:
         raise HTTPException(422, "Invalid category")
     if "transaction_type" in changes and changes["transaction_type"] not in {"expense", "income"}:
         raise HTTPException(422, "Invalid transaction type")
     if isinstance(changes.get("incurred_at"), date):
         changes["incurred_at"] = datetime.combine(changes["incurred_at"], time.min, tzinfo=timezone.utc)
+    if "hst_amount" in changes or "amount" in changes:
+        current = await get_database().receipts.find_one({"_id": receipt_id, "document_type": "receipt", "deleted_at": None})
+        if current is None:
+            raise HTTPException(404, "Receipt not found")
+        tax = changes.get("hst_amount", current.get("hst_amount"))
+        total = changes.get("amount", current.get("amount"))
+        if tax is not None and total is not None and tax > total:
+            raise HTTPException(422, "HST cannot exceed the receipt total")
+        if changes.get("hst_amount") is not None:
+            changes["hst_amount"] = round(changes["hst_amount"], 2)
     changes["updated_at"] = utcnow()
     item = await get_database().receipts.find_one_and_update({"_id": receipt_id, "document_type": "receipt", "deleted_at": None}, {"$set": changes}, return_document=ReturnDocument.AFTER)
     if not item:
@@ -483,27 +504,38 @@ async def delete_receipt(receipt_id: UUID, actor: dict = Depends(require_permiss
 
 
 @router.get("/reports/summary")
-async def receipt_summary(year: int | Literal["all"] = date.today().year, job_id: UUID | None = None, currency: str | None = None,
+async def receipt_summary(year: int | Literal["all"] = date.today().year, currency: str | None = None, business_activity: BusinessActivity | None = None,
                           _: dict = Depends(require_permission("RECEIPTS_READ"))):
     if year != "all" and (year < 1900 or year > 9998):
         raise HTTPException(422, "Year must be between 1900 and 9998")
-    match = {"deleted_at": None, "document_type": "receipt", "amount": {"$ne": None}}
+    match = {"deleted_at": None, "document_type": "receipt"}
+    if business_activity is not None:
+        match.update(_activity_filter(business_activity))
     if year != "all":
         start, end = datetime(year, 1, 1, tzinfo=timezone.utc), datetime(year + 1, 1, 1, tzinfo=timezone.utc)
         match["incurred_at"] = {"$gte": start, "$lt": end}
-    job = None
-    if job_id is not None:
-        job = await get_database().jobs.find_one({"_id": job_id, "deleted_at": None})
-        if job is None:
-            raise HTTPException(404, "Job not found")
-        match.update({"link_type": "job", "link_id": {"$in": [job["code"], str(job_id)]}})
     items = [item async for item in get_database().receipts.find(match)]
+    hst_paid = hst_collected = Decimal("0")
+    hst_missing = hst_non_cad = 0
     income = expenses = 0.0
     categories = {name: 0.0 for name in sorted(CATEGORIES)}
     month_totals = {value: {"income": 0.0, "expenses": 0.0} for value in range(1, 13)}
     week_totals: dict[int, dict[str, float]] = {}
     year_totals: dict[int, dict[str, float]] = {}
     for item in items:
+        expense = item.get("transaction_type") != "income"
+        tax = item.get("hst_amount")
+        if (item.get("currency") or "CAD") not in {"CAD", "CHF"}:
+            hst_non_cad += 1
+        elif tax is None:
+            if expense:
+                hst_missing += 1
+        elif expense:
+            hst_paid += Decimal(str(tax))
+        else:
+            hst_collected += Decimal(str(tax))
+        if item.get("amount") is None:
+            continue
         amount = float(item["amount"])
         bucket = "income" if item.get("transaction_type") == "income" else "expenses"
         if bucket == "income":
@@ -521,9 +553,10 @@ async def receipt_summary(year: int | Literal["all"] = date.today().year, job_id
     months = [{"month": value, **month_totals[value]} for value in range(1, 13)]
     weeks = [{"week": value, **week_totals[value]} for value in sorted(week_totals)]
     years = [{"year": value, **year_totals[value]} for value in sorted(year_totals)]
-    return {"year": year, "job_id": str(job_id) if job else None,
-            "job_code": job["code"] if job else None,
+    return {"year": year, "business_activity": business_activity,
             "currency": "CAD", "currencies": ["CAD"], "mixed_currency": False,
             "income": round(income, 2), "expenses": round(expenses, 2),
+            "hst_paid": float(round(hst_paid, 2)), "hst_collected": float(round(hst_collected, 2)),
+            "hst_missing_receipts": hst_missing, "hst_non_cad_receipts": hst_non_cad,
             "profit_loss": round(income - expenses, 2), "categories": categories,
             "months": months if year != "all" else [], "weeks": weeks if year != "all" else [], "years": years}

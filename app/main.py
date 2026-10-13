@@ -13,9 +13,9 @@ from app.config import get_settings
 from app.database import (DatabaseUnavailableError, close_database, connect_database,
                           database_is_available, get_database)
 from app.routers.auth import router as auth_router
+from app.routers.onedrive import router as onedrive_router
 from app.routers.rbac import router as rbac_router
 from app.routers.receipts import router as receipts_router
-from app.routers.jobs import router as jobs_router
 from app.routers.vehicles import close_external_client, router as vehicles_router
 from app.security import RateLimiter, csrf_protect
 from app.services.receipt_jobs import start_preview_worker, stop_preview_worker
@@ -92,8 +92,8 @@ async def security_headers(request: Request, call_next):
 app.include_router(auth_router)
 app.include_router(rbac_router)
 app.include_router(receipts_router)
-app.include_router(jobs_router)
 app.include_router(vehicles_router)
+app.include_router(onedrive_router)
 
 
 @app.get("/")

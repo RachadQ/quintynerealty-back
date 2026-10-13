@@ -93,7 +93,7 @@ and keeps `OCR_ENGINE=paddle` as the primary engine with RapidOCR as its fallbac
 Installing into an existing environment does not uninstall old dependencies;
 use a fresh environment when measuring the smaller install.
 
-Receipt and RFI image uploads use lightweight PaddleOCR PP-OCRv5 mobile text detection and recognition locally, with RapidOCR as an automatic fallback; no paid OCR service is required. Optional orientation, document-layout, table, formula, seal, and page-unwarping models are not loaded. Documents can be categorized as gas, restaurant/client, maintenance, job expense, or other, and linked to a job, quote, or estimate reference. The reporting endpoint returns weekly, monthly, yearly, category, and profit/loss totals.
+Receipt image uploads use lightweight PaddleOCR PP-OCRv5 mobile text detection and recognition locally, with RapidOCR as an automatic fallback; no paid OCR service is required. Optional orientation, document-layout, table, formula, seal, and page-unwarping models are not loaded. Documents can be categorized as gas, restaurant/client, maintenance, job expense, or other, and assigned a business activity. The reporting endpoint returns weekly, monthly, yearly, category, and profit/loss totals.
 
 OCR previews run as durable background jobs. `POST /receipts/preview` returns a job ID immediately, and `GET /receipts/preview/{job_id}` returns `queued`, `processing`, `completed`, or `failed`. Temporary uploads remain in MongoDB GridFS so work survives a browser refresh; they are deleted after confirmation or automatically after one hour.
 
@@ -103,18 +103,52 @@ Without Drive configuration, files are stored under `uploads/Receipts/<year>/<ca
 2. Create a Drive folder and share it with the service account email as an editor.
 3. Put the service account JSON on one line in `GOOGLE_DRIVE_CREDENTIALS_JSON` and set the shared folder ID in `GOOGLE_DRIVE_ROOT_FOLDER_ID`.
 
-The backend then creates `Receipts/<year>/<category>` and `RFI/<year>/<category>` automatically.
+The backend then creates `Receipts/<year>/<category>` automatically.
 
 Receipt endpoints require the `RECEIPTS_READ`, `RECEIPTS_CREATE`, `RECEIPTS_UPDATE`, and `RECEIPTS_DELETE` permissions. Super administrators automatically have access.
 
-## Jobs
+## Business receipts
 
-`GET /jobs` lists active job records, `POST /jobs` creates a job with a unique code, and `GET /jobs/{id}` groups its receipts, RFIs, quotes, and drawings. Receipt and RFI uploads attach to a job with `link_type=job` and `link_id=<job code>`; the API validates the job and normalizes the code. Quotes and drawings are PDF or image files uploaded to `POST /jobs/{id}/files` with `kind=quote` or `kind=drawing`. Local files are stored below `uploads/Jobs/<job ID>/<kind>`; Drive files are stored below `Jobs/<job code>/Quotes` or `Jobs/<job code>/Drawings`. Job routes use `JOBS_READ`, `JOBS_CREATE`, and `JOBS_UPDATE` permissions. Uploads keep the existing MIME and size limits, and RFIs remain excluded from financial reports.
+`POST /receipts` and `POST /receipts/from-preview/{job_id}` accept `business_activity` as a multipart field. Supported values are `vending_machine`, `third_party_sales`, `rentals`, and `other` (the default). Invalid values return 422. The preview job ID identifies OCR processing only.
 
-Structured quotes can also be created with `POST /jobs/{id}/quotes` and edited with `PATCH /jobs/{id}/quotes/{quote_id}`. Each quote stores multiple items with name, description, quantity, unit price, source URL, and calculated totals. `POST /jobs/{id}/quotes/extract-item` accepts a public product URL and uses Beautiful Soup to read JSON-LD product data or page metadata for the item name, description, and price. The extractor rejects local/private hosts and oversized or non-HTML pages. Uploaded quote files remain available alongside structured quotes.
+`PATCH /receipts/{receipt_id}` can update `business_activity` with `RECEIPTS_UPDATE`. `GET /receipts` and `GET /receipts/reports/summary` accept an optional `business_activity` query parameter. Filtering by `other` includes older receipts with a missing or null business type. Business activity is independent of receipt category and income/expense classification.
 
-Product extraction also reads embedded JSON product records (including Best Buy and Home Hardware) when their product ID matches the requested URL. It fills fields independently, preserving recovered descriptions and prices when the name must be inferred from the URL. The response includes a warning for inferred names or missing details; unavailable prices stay `null`. Scripts are never executed, and blocked pages may still require manual entry.
+Jobs, job-linked uploads, quotes, drawings, and RFI endpoints have been removed. Existing records and stored files are retained; existing receipts remain visible in the standalone receipt list.
 
-Creating or editing a structured quote automatically generates a PDF containing the job, company, items, quantities, CAD unit prices, line totals, total, and notes. Quote fields and PDF bytes are saved atomically in the same MongoDB document so serverless restarts cannot lose the PDF. JSON responses omit PDF bytes and include `pdf_url`, `pdf_filename`, and `pdf_generated_at` for newly saved quotes. `GET /jobs/{job_id}/quotes/{quote_id}/pdf` requires `JOBS_READ`, downloads the saved PDF, and generates PDFs on demand for older quotes. Deleted jobs or quotes cannot be downloaded. Saves accept up to 500 items and an 8 MB generated PDF. PDF downloads are audited; quote edits retain CSRF and `JOBS_UPDATE` checks.
 
-RFI functionality has been removed from the interface and backend endpoints. Existing RFI records and stored files are retained but are excluded from receipt lists and reports.
+## HST tracking
+
+Receipts store an optional `hst_amount`, separate from the tax-inclusive receipt total. OCR suggests explicitly labelled HST amounts for user review; no tax is inferred from a rate or total. Enter 0 when no HST was charged, and leave unknown amounts blank. Existing receipts can be updated in Receipt details. Financial reports total CAD HST paid on expenses and HST collected on income separately, using the selected year and business activity, and count expense receipts missing HST. These totals support review; they do not determine input tax credit eligibility. Original receipts remain available.
+
+API clients can send `hst_reviewed=true` with a blank HST amount to preserve an explicitly unknown value rather than re-extracting it from OCR. `PATCH /receipts/{receipt_id}` accepts `hst_amount: null` to mark HST as unknown. Negative, non-finite, or above-total HST amounts are rejected.
+
+
+## Vehicle catalog performance
+
+Canadian vehicle ratings are cached in memory and in a temporary disk cache reusable for 24 hours across backend restarts. Concurrent requests share one dataset download. The year lookup returns makes and model configurations together. The frontend caches each selected year, shows loading/errors, and offers manual entry. Vehicle mutations refresh only vehicle data instead of reloading receipt OCR work.
+
+
+Annual vehicle kilometres are calculated from non-deleted trips dated in the current calendar year, and update after logging a trip. Trips can be business or personal; older trips without a purpose are treated as business. The insurance business-use percentage uses logged business kilometres divided by all logged kilometres. Insurance estimates assume twelve months at the saved monthly cost and a complete driving log. Historical manually entered annual totals are retained in storage but no longer used for this calculation.
+
+
+Gas receipt usage is automatic FIFO per vehicle: receipt date first, upload time to break ties. Trips are allocated chronologically and can consume fuel across multiple receipts. Existing trip distances are included regardless of their old manual receipt selection; stored history is retained. Exhausted receipts have zero remaining litres. Fuel used beyond recorded purchases remains visible in the vehicle overdrawn warning and is allocated when another receipt is added.
+
+
+## OneDrive receipt storage
+
+Personal OneDrive is supported with delegated Microsoft Graph access. Configure `MICROSOFT_CLIENT_ID`, `MICROSOFT_CLIENT_SECRET`, `MICROSOFT_REDIRECT_URI`, and `MICROSOFT_TENANT_ID=consumers` in the real backend environment. For Microsoft 365, use the tenant ID or `organizations`; `common` supports both where the app registration permits it. Register the callback as a **Web** redirect URI, enable personal Microsoft accounts in Supported account types, and grant delegated `Files.ReadWrite` plus `offline_access`. The callback path is `/auth/microsoft/callback`, and the callback host must be in `TRUSTED_HOSTS`.
+
+For this localhost setup the configured callback is `http://localhost:8002/auth/microsoft/callback`. `SESSION_COOKIE_SECURE=false` is needed for plain HTTP local development; production requires secure cookies and HTTPS. A super administrator opens Receipts and selects **Connect OneDrive**, signs in, and approves access. This connects storage and does not replace application sign-in. Tokens stay encrypted in MongoDB with a key derived from `SESSION_SECRET`; rotating that secret requires reconnecting OneDrive.
+
+After connection, new receipts upload to `Quintyne Realty/<year>/<category>/<MM - Month>`. Unique filenames prevent overwriting. Existing receipt files retain their original storage location. OneDrive takes priority over Google Drive/local storage after it is connected; connection failures fail the upload instead of silently switching storage. Receipt previews remain in MongoDB GridFS. Receipt download routes retain app permission checks and fetch OneDrive bytes through the backend.
+
+Reference: https://learn.microsoft.com/en-us/graph/api/driveitem-put-content and https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow.
+
+OneDrive year and month folders use the reviewed receipt date, not the upload date. For example, a gas receipt dated October 12, 2026 is stored under `Quintyne Realty/2026/Gas/10 - October`. Missing folders are created automatically during upload; existing files are not moved.
+
+
+## OneDrive trip spreadsheet
+
+Each saved trip updates one app-managed `Trip Log <year>.csv` spreadsheet in `Quintyne Realty/<year>`. CSV opens in Excel. The log includes all non-deleted trips across vehicles and months for that calendar year, with date, vehicle, business/personal type, From, To, kilometres, estimated litres used, notes, and a stable trip ID. The first upload uses a temporary unique filename, then renames the managed file to `Trip Log <year>.csv`. Existing name conflicts are reported without overwriting another file. Later updates reuse the same OneDrive file ID.
+
+The spreadsheet is rebuilt from saved trip records, so retries do not duplicate rows. It is a generated report; make corrections in the app because later syncs replace its contents. If OneDrive is disconnected or an update fails, the trip remains saved and the form shows a retry action. `POST /vehicles/{vehicle_id}/trips/{trip_id}/sync-spreadsheet` retries without creating another trip. Concurrent updates use a shared MongoDB lease. Receipt folders remain organized by year/category/month; each annual trip log stays directly in its year folder.
