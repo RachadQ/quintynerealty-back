@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 from datetime import timedelta, timezone
 from urllib.parse import quote, urlparse
 from uuid import uuid4
@@ -90,6 +91,34 @@ def safe_web_url(value: str) -> str | None:
     return None
 
 
+def token_error_detail(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+        if not isinstance(body, dict):
+            body = {}
+    except ValueError:
+        body = {}
+    values = body.get('error_codes', [])
+    codes = [str(value) for value in values if type(value) is int and 0 < value < 1_000_000_000] if isinstance(values, list) else []
+    if not codes:
+        codes = re.findall(r'\bAADSTS(\d{3,9})\b', str(body.get('error_description', '')))
+    codes = list(dict.fromkeys(codes))[:4]
+    hints = {
+        '7000215': 'MICROSOFT_CLIENT_SECRET is invalid. Use the secret Value from the same app registration, not its Secret ID, then redeploy.',
+        '7000222': 'The Microsoft client secret expired. Create a new secret, update MICROSOFT_CLIENT_SECRET, and redeploy.',
+        '700016': 'MICROSOFT_CLIENT_ID or MICROSOFT_TENANT_ID does not match the Microsoft app registration.',
+        '700025': 'This app is configured as a public client. Register the callback under the Web platform for the backend flow.',
+        '50011': 'MICROSOFT_REDIRECT_URI must exactly match the Web redirect URI in the same app registration.',
+        '9002327': 'The callback was registered as a Single-page application. Register it under Web for this backend flow.',
+        '9002326': 'Check that the callback is registered under Web, not Single-page application.',
+        '70000': 'The authorization code or refresh token is invalid or expired. Start a fresh OneDrive connection from Receipts.',
+    }
+    code_text = ', '.join('AADSTS' + code for code in codes)
+    hint = next((hints[code] for code in codes if code in hints), 'Check the Microsoft app settings and start a fresh OneDrive connection from Receipts.')
+    # Never return Microsoft's raw description: it can contain account/client details.
+    return 'Microsoft authorization failed' + (f' ({code_text})' if code_text else f' (HTTP {response.status_code})') + '. ' + hint
+
+
 async def token_request(data: dict) -> dict:
     settings = get_settings()
     async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
@@ -101,7 +130,9 @@ async def token_request(data: dict) -> dict:
         except httpx.HTTPError:
             raise HTTPException(502, "Microsoft connection service is unavailable") from None
     if response.status_code != 200:
-        raise HTTPException(503, "Microsoft authorization failed. Check the app settings or reconnect OneDrive")
+        detail = token_error_detail(response)
+        logging.getLogger(__name__).warning('%s', detail)
+        raise HTTPException(503, detail)
     tokens = response.json()
     if not tokens.get('access_token'):
         raise HTTPException(503, "Microsoft did not return an access token")
