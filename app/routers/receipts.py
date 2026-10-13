@@ -124,8 +124,8 @@ async def preview_receipt_ocr(
     actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
     """Queue OCR preview for single or multiple uploaded files (e.g. mobile multi-select)."""
-    if document_type not in {"receipt", "rfi"}:
-        raise HTTPException(422, "Document type must be receipt or rfi")
+    if document_type != "receipt":
+        raise HTTPException(422, "Document type must be receipt")
 
     upload_list: list[UploadFile] = []
     if files:
@@ -153,8 +153,8 @@ async def preview_receipt_ocr_batch(
     actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
     """Explicit batch endpoint for multi-image mobile uploads."""
-    if document_type not in {"receipt", "rfi"}:
-        raise HTTPException(422, "Document type must be receipt or rfi")
+    if document_type != "receipt":
+        raise HTTPException(422, "Document type must be receipt")
     if not files:
         raise HTTPException(422, "No upload files provided")
 
@@ -171,7 +171,7 @@ async def preview_receipt_ocr_batch(
 @router.get("/preview-jobs")
 async def list_receipt_preview_jobs(actor: dict = Depends(require_permission("RECEIPTS_CREATE"))):
     db = get_database()
-    query = {"created_by": actor["_id"], "expires_at": {"$gt": utcnow()}}
+    query = {"document_type": "receipt", "created_by": actor["_id"], "expires_at": {"$gt": utcnow()}}
 
     # Process any queued jobs for this user so multi-image mobile batches update immediately
     queued_jobs = [j["_id"] async for j in db.ocr_preview_jobs.find({**query, "status": "queued"})]
@@ -199,7 +199,7 @@ async def get_receipt_preview_job(
     job_id: UUID, actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
     db = get_database()
-    job = await db.ocr_preview_jobs.find_one({"_id": job_id, "created_by": actor["_id"]})
+    job = await db.ocr_preview_jobs.find_one({"_id": job_id, "document_type": "receipt", "created_by": actor["_id"]})
     if not job:
         raise HTTPException(404, "Receipt preview job not found or expired")
     if job["status"] == "queued":
@@ -220,7 +220,7 @@ async def get_receipt_preview_job(
 async def get_receipt_preview_file(
     job_id: UUID, actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
-    job = await get_database().ocr_preview_jobs.find_one({"_id": job_id, "created_by": actor["_id"]})
+    job = await get_database().ocr_preview_jobs.find_one({"_id": job_id, "document_type": "receipt", "created_by": actor["_id"]})
     if not job:
         raise HTTPException(404, "Receipt preview job not found or expired")
     bucket = AsyncIOMotorGridFSBucket(get_database(), bucket_name="ocr_preview_uploads")
@@ -238,8 +238,8 @@ async def get_receipt_preview_file(
 def _validate(category: str, document_type: str, transaction_type: str) -> None:
     if category not in CATEGORIES:
         raise HTTPException(422, f"Category must be one of: {', '.join(sorted(CATEGORIES))}")
-    if document_type not in {"receipt", "rfi"}:
-        raise HTTPException(422, "Document type must be receipt or rfi")
+    if document_type != "receipt":
+        raise HTTPException(422, "Document type must be receipt")
     if transaction_type not in {"expense", "income"}:
         raise HTTPException(422, "Transaction type must be expense or income")
 
@@ -273,23 +273,9 @@ async def upload_receipt(
     link_type: str | None = Form(None), link_id: str | None = Form(None), link_label: str | None = Form(None),
     vehicle_id: UUID | None = Form(None), fuel_litres: float | None = Form(None),
     ocr_text_override: str | None = Form(None),
-    rfi_number: str | None = Form(None), rfi_subject: str | None = Form(None),
-    rfi_question: str | None = Form(None), rfi_to: str | None = Form(None),
-    rfi_attention_name: str | None = Form(None), rfi_attention_phone: str | None = Form(None),
-    rfi_attention_email: str | None = Form(None),
-    rfi_due_at: date | None = Form(None),
     actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
     _validate(category, document_type, transaction_type)
-    if document_type == "rfi":
-        for value, limit, label in ((rfi_number, 80, "RFI number"), (rfi_subject, 200, "RFI subject"),
-                                    (rfi_question, 5000, "RFI question"), (rfi_to, 1000, "RFI recipient"),
-                                    (rfi_attention_name, 200, "Attention name"),
-                                    (rfi_attention_phone, 80, "Attention phone"),
-                                    (rfi_attention_email, 200, "Attention email")):
-            if value is not None and len(value) > limit:
-                raise HTTPException(422, f"{label} is too long")
-    link_id = await _validate_job_link(link_type, link_id)
     if vehicle_id is not None:
         if document_type != "receipt" or category != "gas":
             raise HTTPException(422, "A vehicle can only be assigned to a gas receipt")
@@ -317,11 +303,11 @@ async def upload_receipt(
     storage_provider = "local"
     if settings.google_drive_credentials_json and settings.google_drive_root_folder_id:
         drive = DriveStorage(settings.google_drive_credentials_json, settings.google_drive_root_folder_id)
-        folders = ["RFI" if document_type == "rfi" else "Receipts", year, category.replace("_", " ").title()]
+        folders = ["Receipts", year, category.replace("_", " ").title()]
         drive_data = await asyncio.to_thread(drive.upload, content, filename, file.content_type, folders)
         storage_provider = "google_drive"
     else:
-        target = Path(settings.local_upload_directory) / ("RFI" if document_type == "rfi" else "Receipts") / year / category
+        target = Path(settings.local_upload_directory) / "Receipts" / year / category
         target.mkdir(parents=True, exist_ok=True)
         path = target / f"{uuid4()}-{filename}"
         await asyncio.to_thread(path.write_bytes, content)
@@ -335,21 +321,11 @@ async def upload_receipt(
         "filename": filename, "mime_type": file.content_type, "size_bytes": len(content), "ocr_text": ocr_text,
         "link_type": link_type or None, "link_id": link_id or None, "link_label": link_label or None,
         "vehicle_id": vehicle_id, "fuel_litres": fuel_litres,
-        "rfi_number": rfi_number.strip() if document_type == "rfi" and rfi_number else None,
-        "rfi_subject": rfi_subject.strip() if document_type == "rfi" and rfi_subject else None,
-        "rfi_question": rfi_question.strip() if document_type == "rfi" and rfi_question else None,
-        "rfi_to": rfi_to.strip() if document_type == "rfi" and rfi_to else None,
-        "rfi_attention_name": rfi_attention_name.strip() if document_type == "rfi" and rfi_attention_name else None,
-        "rfi_attention_phone": rfi_attention_phone.strip() if document_type == "rfi" and rfi_attention_phone else None,
-        "rfi_attention_email": rfi_attention_email.strip() if document_type == "rfi" and rfi_attention_email else None,
-        "rfi_due_at": datetime.combine(rfi_due_at, time.min, tzinfo=timezone.utc) if document_type == "rfi" and rfi_due_at else None,
-        "status": "open" if document_type == "rfi" else None,
-        "closed_at": None,
         "storage_provider": storage_provider, **drive_data, "created_by": actor["_id"], "created_at": now,
         "updated_at": now, "deleted_at": None,
     }
     await get_database().receipts.insert_one(document)
-    await write_audit("RECEIPT_UPLOADED" if document_type == "receipt" else "RFI_UPLOADED", actor["_id"], document_type, document["_id"])
+    await write_audit("RECEIPT_UPLOADED", actor["_id"], document_type, document["_id"])
     return serialize(document)
 
 
@@ -361,16 +337,12 @@ async def upload_receipt_from_preview(
     link_type: str | None = Form(None), link_id: str | None = Form(None), link_label: str | None = Form(None),
     vehicle_id: UUID | None = Form(None), fuel_litres: float | None = Form(None),
     ocr_text_override: str | None = Form(None),
-    rfi_number: str | None = Form(None), rfi_subject: str | None = Form(None),
-    rfi_question: str | None = Form(None), rfi_to: str | None = Form(None),
-    rfi_attention_name: str | None = Form(None), rfi_attention_phone: str | None = Form(None),
-    rfi_attention_email: str | None = Form(None),
-    rfi_due_at: date | None = Form(None),
     actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
+    _validate(category, document_type, transaction_type)
     db = get_database()
     job = await db.ocr_preview_jobs.find_one_and_update(
-        {"_id": job_id, "created_by": actor["_id"], "status": {"$in": ["completed", "failed"]}},
+        {"_id": job_id, "document_type": "receipt", "created_by": actor["_id"], "status": {"$in": ["completed", "failed"]}},
         {"$set": {"status": "confirming", "updated_at": utcnow()}},
         return_document=ReturnDocument.BEFORE,
     )
@@ -392,11 +364,7 @@ async def upload_receipt_from_preview(
             transaction_type=transaction_type, incurred_at=incurred_at, amount=amount,
             vendor=vendor, currency=currency, link_type=link_type, link_id=link_id,
             link_label=link_label, vehicle_id=vehicle_id, fuel_litres=fuel_litres,
-            ocr_text_override=reviewed_text, rfi_number=rfi_number,
-            rfi_subject=rfi_subject, rfi_question=rfi_question, rfi_to=rfi_to,
-            rfi_attention_name=rfi_attention_name, rfi_attention_phone=rfi_attention_phone,
-            rfi_attention_email=rfi_attention_email,
-            rfi_due_at=rfi_due_at, actor=actor,
+            ocr_text_override=reviewed_text, actor=actor,
         )
     except Exception:
         await db.ocr_preview_jobs.update_one(
@@ -413,21 +381,18 @@ async def upload_receipt_from_preview(
 @router.get("")
 async def list_receipts(year: int | None = None, category: str | None = None, document_type: str | None = None,
                         _: dict = Depends(require_permission("RECEIPTS_READ"))):
-    query: dict = {"deleted_at": None}
+    query: dict = {"deleted_at": None, "document_type": "receipt"}
     if year:
         query["incurred_at"] = {"$gte": datetime(year, 1, 1, tzinfo=timezone.utc), "$lt": datetime(year + 1, 1, 1, tzinfo=timezone.utc)}
     if category:
         query["category"] = category
-    if document_type:
-        query["document_type"] = document_type
+    if document_type and document_type != "receipt":
+        raise HTTPException(422, "Document type must be receipt")
     db = get_database()
-    rfi_ids_with_responses = set(await db.rfi_responses.distinct("rfi_id", {"deleted_at": None}))
     items = []
     async for item in db.receipts.find(query).sort("incurred_at", -1):
         if item.get("currency") in ("CHF", None, ""):
             item["currency"] = "CAD"
-        if item.get("document_type") == "rfi" and (item.get("_id") in rfi_ids_with_responses or item.get("status") == "closed"):
-            item["status"] = "closed"
         items.append(serialize(item))
     return items
 
@@ -450,7 +415,7 @@ def _resolve_local_file(local_path: str | None) -> Path | None:
 
 @router.get("/{receipt_id}/file")
 async def download_receipt_file(receipt_id: UUID, _: dict = Depends(require_permission("RECEIPTS_READ"))):
-    document = await get_database().receipts.find_one({"_id": receipt_id, "deleted_at": None})
+    document = await get_database().receipts.find_one({"_id": receipt_id, "document_type": "receipt", "deleted_at": None})
     if document is None:
         raise HTTPException(404, "Document not found")
     if document.get("storage_provider") == "google_drive" or document.get("web_url"):
@@ -467,182 +432,29 @@ async def download_receipt_file(receipt_id: UUID, _: dict = Depends(require_perm
     raise HTTPException(404, "Receipt file is no longer available on disk")
 
 
-async def _rfi_or_404(rfi_id: UUID) -> dict:
-    rfi = await get_database().receipts.find_one({"_id": rfi_id, "document_type": "rfi", "deleted_at": None})
-    if rfi is None:
-        raise HTTPException(404, "RFI not found")
-    return rfi
 
 
-def _public_rfi_response(document: dict) -> dict:
-    item = serialize(document)
-    item.pop("local_path", None)
-    return item
 
 
-@router.get("/{rfi_id}/attachments")
-async def list_rfi_attachments(rfi_id: UUID, _: dict = Depends(require_permission("RECEIPTS_READ"))):
-    await _rfi_or_404(rfi_id)
-    return [_public_rfi_response(item) async for item in get_database().rfi_attachments.find(
-        {"rfi_id": rfi_id, "deleted_at": None}).sort("created_at", -1)]
 
 
-@router.post("/{rfi_id}/attachments", status_code=201)
-async def add_rfi_attachment(rfi_id: UUID, file: UploadFile = File(...),
-                             actor: dict = Depends(require_permission("RECEIPTS_UPDATE"))):
-    rfi = await _rfi_or_404(rfi_id)
-    if file.content_type not in ALLOWED_TYPES:
-        raise HTTPException(415, "Upload a JPEG, PNG, WebP, or PDF file")
-    content = await file.read(settings.max_upload_bytes + 1)
-    if len(content) > settings.max_upload_bytes:
-        raise HTTPException(413, "File is larger than the configured upload limit")
-    filename = _safe_filename(file.filename or "attachment")
-    year = str(rfi["incurred_at"].year)
-    category = rfi.get("category") or "other"
-    if settings.google_drive_credentials_json and settings.google_drive_root_folder_id:
-        drive = DriveStorage(settings.google_drive_credentials_json, settings.google_drive_root_folder_id)
-        storage = await asyncio.to_thread(drive.upload, content, filename, file.content_type,
-                                           ["RFI", year, category.replace("_", " ").title()])
-        provider = "google_drive"
-    else:
-        target = Path(settings.local_upload_directory) / "RFI" / year / category
-        target.mkdir(parents=True, exist_ok=True)
-        path = target / f"{uuid4()}-{filename}"
-        await asyncio.to_thread(path.write_bytes, content)
-        storage = {"local_path": str(path)}
-        provider = "local"
-    document = {"_id": uuid4(), "rfi_id": rfi_id, "filename": filename,
-                "mime_type": file.content_type, "size_bytes": len(content),
-                "storage_provider": provider, **storage, "created_by": actor["_id"],
-                "created_at": utcnow(), "deleted_at": None}
-    await get_database().rfi_attachments.insert_one(document)
-    await write_audit("RFI_ATTACHMENT_UPLOADED", actor["_id"], "rfi_attachment", document["_id"],
-                      metadata={"rfi_id": str(rfi_id)})
-    return _public_rfi_response(document)
 
 
-@router.get("/{rfi_id}/attachments/{attachment_id}/file")
-async def download_rfi_attachment(rfi_id: UUID, attachment_id: UUID,
-                                  _: dict = Depends(require_permission("RECEIPTS_READ"))):
-    await _rfi_or_404(rfi_id)
-    item = await get_database().rfi_attachments.find_one({"_id": attachment_id, "rfi_id": rfi_id,
-                                                          "deleted_at": None})
-    if item is None:
-        raise HTTPException(404, "RFI attachment not found")
-    if item.get("storage_provider") == "google_drive" or item.get("web_url"):
-        web_url = item.get("web_url")
-        if web_url:
-            return RedirectResponse(web_url, status_code=307)
-    resolved = _resolve_local_file(item.get("local_path"))
-    if resolved:
-        return FileResponse(resolved, media_type=item.get("mime_type") or "application/octet-stream",
-                            filename=item.get("filename") or "attachment",
-                            content_disposition_type="inline")
-    if item.get("web_url"):
-        return RedirectResponse(item["web_url"], status_code=307)
-    raise HTTPException(404, "RFI attachment file is no longer available")
 
 
-@router.delete("/{rfi_id}/attachments/{attachment_id}")
-async def delete_rfi_attachment(rfi_id: UUID, attachment_id: UUID,
-                                actor: dict = Depends(require_permission("RECEIPTS_UPDATE"))):
-    await _rfi_or_404(rfi_id)
-    result = await get_database().rfi_attachments.update_one(
-        {"_id": attachment_id, "rfi_id": rfi_id, "deleted_at": None},
-        {"$set": {"deleted_at": utcnow()}})
-    if not result.matched_count:
-        raise HTTPException(404, "RFI attachment not found")
-    await write_audit("RFI_ATTACHMENT_DELETED", actor["_id"], "rfi_attachment", attachment_id,
-                      metadata={"rfi_id": str(rfi_id)})
-    return {"success": True}
 
 
-@router.get("/{rfi_id}/responses")
-async def list_rfi_responses(rfi_id: UUID, _: dict = Depends(require_permission("RECEIPTS_READ"))):
-    await _rfi_or_404(rfi_id)
-    return [_public_rfi_response(item) async for item in get_database().rfi_responses.find(
-        {"rfi_id": rfi_id, "deleted_at": None}).sort("responded_at", 1)]
 
 
-@router.post("/{rfi_id}/responses", status_code=201)
-async def add_rfi_response(
-    rfi_id: UUID, response_text: str = Form(""), responder_name: str = Form(...),
-    responded_at: date = Form(default_factory=date.today), file: UploadFile | None = File(None),
-    actor: dict = Depends(require_permission("RECEIPTS_UPDATE")),
-):
-    rfi = await _rfi_or_404(rfi_id)
-    answer = response_text.strip()
-    responder = responder_name.strip()
-    if not responder or len(responder) > 200:
-        raise HTTPException(422, "Responder name is required and must be at most 200 characters")
-    if len(answer) > 10000:
-        raise HTTPException(422, "Response text is too long")
-    if not answer and file is None:
-        raise HTTPException(422, "Add a response or an attachment")
-    attachment: dict = {}
-    if file is not None:
-        if file.content_type not in ALLOWED_TYPES:
-            raise HTTPException(415, "Upload a JPEG, PNG, WebP, or PDF file")
-        content = await file.read(settings.max_upload_bytes + 1)
-        if len(content) > settings.max_upload_bytes:
-            raise HTTPException(413, "File is larger than the configured upload limit")
-        filename = _safe_filename(file.filename or "response")
-        year = str(rfi["incurred_at"].year)
-        category = rfi.get("category") or "other"
-        if settings.google_drive_credentials_json and settings.google_drive_root_folder_id:
-            drive = DriveStorage(settings.google_drive_credentials_json, settings.google_drive_root_folder_id)
-            storage = await asyncio.to_thread(drive.upload, content, filename, file.content_type,
-                                               ["RFI", year, category.replace("_", " ").title()])
-            provider = "google_drive"
-        else:
-            target = Path(settings.local_upload_directory) / "RFI" / year / category
-            target.mkdir(parents=True, exist_ok=True)
-            path = target / f"{uuid4()}-{filename}"
-            await asyncio.to_thread(path.write_bytes, content)
-            storage = {"local_path": str(path)}
-            provider = "local"
-        attachment = {"filename": filename, "mime_type": file.content_type, "size_bytes": len(content),
-                      "storage_provider": provider, **storage}
-    response = {"_id": uuid4(), "rfi_id": rfi_id, "response_text": answer,
-                "responder_name": responder, "responded_at": datetime.combine(responded_at, time.min, tzinfo=timezone.utc),
-                "created_at": utcnow(), "created_by": actor["_id"], "deleted_at": None, **attachment}
-    await get_database().rfi_responses.insert_one(response)
-    await get_database().receipts.update_one(
-        {"_id": rfi_id, "document_type": "rfi"},
-        {"$set": {"status": "closed", "closed_at": utcnow(), "updated_at": utcnow()}}
-    )
-    await write_audit("RFI_RESPONSE_ADDED", actor["_id"], "rfi_response", response["_id"],
-                      metadata={"rfi_id": str(rfi_id)})
-    return _public_rfi_response(response)
 
 
-@router.get("/{rfi_id}/responses/{response_id}/file")
-async def download_rfi_response_file(rfi_id: UUID, response_id: UUID,
-                                     _: dict = Depends(require_permission("RECEIPTS_READ"))):
-    await _rfi_or_404(rfi_id)
-    item = await get_database().rfi_responses.find_one({"_id": response_id, "rfi_id": rfi_id,
-                                                        "deleted_at": None})
-    if item is None or not item.get("filename"):
-        raise HTTPException(404, "Response file not found")
-    if item.get("storage_provider") == "google_drive" or item.get("web_url"):
-        web_url = item.get("web_url")
-        if web_url:
-            return RedirectResponse(web_url, status_code=307)
-    resolved = _resolve_local_file(item.get("local_path"))
-    if resolved:
-        return FileResponse(resolved, media_type=item.get("mime_type") or "application/octet-stream",
-                            filename=item.get("filename") or "response",
-                            content_disposition_type="inline")
-    if item.get("web_url"):
-        return RedirectResponse(item["web_url"], status_code=307)
-    raise HTTPException(404, "Response file is no longer available")
 
 
 @router.patch("/{receipt_id}")
 async def update_receipt(receipt_id: UUID, payload: ReceiptUpdate, actor: dict = Depends(require_permission("RECEIPTS_UPDATE"))):
     changes = payload.model_dump(exclude_none=True)
     if "link_type" in changes or "link_id" in changes:
-        current = await get_database().receipts.find_one({"_id": receipt_id, "deleted_at": None})
+        current = await get_database().receipts.find_one({"_id": receipt_id, "document_type": "receipt", "deleted_at": None})
         if not current:
             raise HTTPException(404, "Receipt not found")
         changes["link_id"] = await _validate_job_link(changes.get("link_type", current.get("link_type")),
@@ -654,7 +466,7 @@ async def update_receipt(receipt_id: UUID, payload: ReceiptUpdate, actor: dict =
     if isinstance(changes.get("incurred_at"), date):
         changes["incurred_at"] = datetime.combine(changes["incurred_at"], time.min, tzinfo=timezone.utc)
     changes["updated_at"] = utcnow()
-    item = await get_database().receipts.find_one_and_update({"_id": receipt_id, "deleted_at": None}, {"$set": changes}, return_document=ReturnDocument.AFTER)
+    item = await get_database().receipts.find_one_and_update({"_id": receipt_id, "document_type": "receipt", "deleted_at": None}, {"$set": changes}, return_document=ReturnDocument.AFTER)
     if not item:
         raise HTTPException(404, "Receipt not found")
     await write_audit("RECEIPT_UPDATED", actor["_id"], "receipt", receipt_id, changes)
@@ -663,7 +475,7 @@ async def update_receipt(receipt_id: UUID, payload: ReceiptUpdate, actor: dict =
 
 @router.delete("/{receipt_id}")
 async def delete_receipt(receipt_id: UUID, actor: dict = Depends(require_permission("RECEIPTS_DELETE"))):
-    result = await get_database().receipts.update_one({"_id": receipt_id, "deleted_at": None}, {"$set": {"deleted_at": utcnow()}})
+    result = await get_database().receipts.update_one({"_id": receipt_id, "document_type": "receipt", "deleted_at": None}, {"$set": {"deleted_at": utcnow()}})
     if not result.matched_count:
         raise HTTPException(404, "Receipt not found")
     await write_audit("RECEIPT_DELETED", actor["_id"], "receipt", receipt_id)

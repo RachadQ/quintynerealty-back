@@ -97,9 +97,6 @@ def require_permission(permission: str) -> Callable:
 
 async def csrf_protect(request: Request) -> None:
     settings = get_settings()
-    # Public RFI submissions use an unguessable link token and no cookie session.
-    if request.method == "POST" and request.url.path == "/public/rfi/responses":
-        return
     if settings.dev_auth_bypass:
         return
     if request.method in {"GET", "HEAD", "OPTIONS"} or request.headers.get("authorization", "").startswith("Bearer "):

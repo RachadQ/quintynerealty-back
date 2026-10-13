@@ -47,16 +47,6 @@ class JobUpdate(BaseModel):
     budget_currency: str | None = Field(default=None, pattern=r"^[A-Za-z]{3}$")
 
 
-class RfiCreate(BaseModel):
-    rfi_number: str = Field(default="", max_length=80)
-    rfi_subject: str = Field(min_length=1, max_length=200)
-    rfi_question: str = Field(min_length=1, max_length=5000)
-    rfi_to: str = Field(default="", max_length=1000)
-    rfi_attention_name: str = Field(default="", max_length=200)
-    rfi_attention_phone: str = Field(default="", max_length=80)
-    rfi_attention_email: str = Field(default="", max_length=200)
-    incurred_at: date = Field(default_factory=date.today)
-    rfi_due_at: date | None = None
 
 
 class QuoteItem(BaseModel):
@@ -224,32 +214,6 @@ async def create_job(payload: JobCreate, actor: dict = Depends(require_permissio
     return serialize(job)
 
 
-@router.post("/{job_id}/rfis", status_code=201)
-async def create_job_rfi(job_id: UUID, payload: RfiCreate,
-                         actor: dict = Depends(require_permission("RECEIPTS_CREATE"))):
-    job = await _job_or_404(job_id)
-    if not payload.rfi_subject.strip() or not payload.rfi_question.strip():
-        raise HTTPException(422, "RFI subject and question are required")
-    now = utcnow()
-    document = {"_id": uuid4(), "document_type": "rfi", "transaction_type": "expense",
-                "category": "job_expense", "vendor": None, "amount": None, "currency": "CAD",
-                "incurred_at": datetime.combine(payload.incurred_at, time.min, tzinfo=timezone.utc),
-                "filename": None, "mime_type": None, "size_bytes": 0, "ocr_text": "",
-                "link_type": "job", "link_id": job["code"], "link_label": job["name"],
-                "rfi_number": payload.rfi_number.strip() or None,
-                "rfi_subject": payload.rfi_subject.strip(), "rfi_question": payload.rfi_question.strip(),
-                "rfi_to": payload.rfi_to.strip() or None,
-                "rfi_attention_name": payload.rfi_attention_name.strip() or None,
-                "rfi_attention_phone": payload.rfi_attention_phone.strip() or None,
-                "rfi_attention_email": payload.rfi_attention_email.strip() or None,
-                "rfi_due_at": datetime.combine(payload.rfi_due_at, time.min, tzinfo=timezone.utc)
-                if payload.rfi_due_at else None,
-                "status": "open", "closed_at": None,
-                "storage_provider": None, "created_by": actor["_id"], "created_at": now,
-                "updated_at": now, "deleted_at": None}
-    await get_database().receipts.insert_one(document)
-    await write_audit("RFI_CREATED", actor["_id"], "rfi", document["_id"])
-    return serialize(document)
 
 
 @router.get("/{job_id}")
@@ -259,7 +223,7 @@ async def get_job(job_id: UUID, actor: dict = Depends(require_permission("JOBS_R
     can_read_receipts = "*" in permissions or "RECEIPTS_READ" in permissions
     db = get_database()
     document_cursor = db.receipts.find({
-            "deleted_at": None, "link_type": "job", "link_id": {"$in": [job["code"], str(job_id)]},
+            "deleted_at": None, "document_type": "receipt", "link_type": "job", "link_id": {"$in": [job["code"], str(job_id)]},
         }).sort("incurred_at", -1) if can_read_receipts else None
     file_cursor = db.job_files.find({
         "job_id": job_id, "deleted_at": None,
@@ -275,12 +239,7 @@ async def get_job(job_id: UUID, actor: dict = Depends(require_permission("JOBS_R
     else:
         raw_files, raw_quotes = await asyncio.gather(
             file_cursor.to_list(length=None), quote_cursor.to_list(length=None))
-    rfi_ids_with_responses = set(await db.rfi_responses.distinct("rfi_id", {"deleted_at": None}))
-    documents = []
-    for item in raw_documents:
-        if item.get("document_type") == "rfi" and (item.get("_id") in rfi_ids_with_responses or item.get("status") == "closed"):
-            item["status"] = "closed"
-        documents.append(serialize(item))
+    documents = [serialize(item) for item in raw_documents]
     files = [_public_file(item) for item in raw_files]
     quotes = [_public_quote(item) for item in raw_quotes]
     budget_currency = (job.get("budget_currency") or "CAD").upper()
@@ -291,7 +250,6 @@ async def get_job(job_id: UUID, actor: dict = Depends(require_permission("JOBS_R
     return {"job": serialize(job),
             "budget": _budget_summary(job, documents, can_read_receipts, exchange_rates),
             "receipts": [doc for doc in documents if doc["document_type"] == "receipt"],
-            "rfis": [doc for doc in documents if doc["document_type"] == "rfi"],
             "quotes": quotes + [file for file in files if file["kind"] == "quote"],
             "drawings": [file for file in files if file["kind"] == "drawing"]}
 

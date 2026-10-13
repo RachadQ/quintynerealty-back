@@ -16,7 +16,6 @@ from app.routers.auth import router as auth_router
 from app.routers.rbac import router as rbac_router
 from app.routers.receipts import router as receipts_router
 from app.routers.jobs import router as jobs_router
-from app.routers.public_rfi import router as public_rfi_router
 from app.routers.vehicles import close_external_client, router as vehicles_router
 from app.security import RateLimiter, csrf_protect
 from app.services.receipt_jobs import start_preview_worker, stop_preview_worker
@@ -54,7 +53,7 @@ app.add_middleware(SessionMiddleware, secret_key=settings.session_secret, https_
                    same_site=settings.auth_cookie_samesite)
 app.add_middleware(CORSMiddleware, allow_origins=settings.origins, allow_credentials=True,
                    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-                   allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID", "X-RFI-Token"])
+                   allow_headers=["Authorization", "Content-Type", "X-CSRF-Token", "X-Request-ID"])
 
 rate_limiter = RateLimiter()
 
@@ -94,7 +93,6 @@ app.include_router(auth_router)
 app.include_router(rbac_router)
 app.include_router(receipts_router)
 app.include_router(jobs_router)
-app.include_router(public_rfi_router)
 app.include_router(vehicles_router)
 
 
