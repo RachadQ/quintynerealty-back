@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import Field, ValidationError, field_validator
+from pydantic import AliasChoices, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     dev_auth_name: str = "Local Developer"
     allowed_email_domains: str = ""
     max_upload_bytes: int = Field(default=25 * 1024 * 1024, ge=1024)
+    gemini_api_key: str = Field(default="", validation_alias=AliasChoices("GEMINI_API_KEY", "GEMINI_API"))
+    gemini_receipt_models: str = "gemini-3.1-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite"
+    gemini_timeout_seconds: int = Field(default=25, ge=5, le=60)
     ocr_engine: Literal["paddle", "rapid"] = "paddle"
     google_oauth_client_id: str = ""
     microsoft_client_id: str = ""

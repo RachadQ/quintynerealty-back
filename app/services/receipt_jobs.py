@@ -12,6 +12,7 @@ from pymongo import ReturnDocument
 from app.database import get_database
 from app.models import utcnow
 from app.services.ocr import extract_document, suggested_fields, warm_ocr_engine
+from app.services.receipt_items import extract_items
 
 logger = logging.getLogger(__name__)
 _worker_task: asyncio.Task[None] | None = None
@@ -82,7 +83,10 @@ async def _process_job(job: dict[str, Any]) -> None:
         logger.info("[JOB-STEP] Downloaded %d bytes from GridFS for job %s", len(content), job_id)
         if job["mime_type"].startswith("image/"):
             logger.info("[JOB-STEP] Launching extract_document in background thread for job %s", job_id)
-            extraction = await asyncio.to_thread(extract_document, content)
+            try:
+                extraction = await asyncio.to_thread(extract_document, content)
+            except Exception:
+                extraction = {"text": "", "engine": "unavailable", "confidence": None}
             text = str(extraction["text"])
             fields = suggested_fields(text)
             logger.info(
@@ -109,6 +113,7 @@ async def _process_job(job: dict[str, Any]) -> None:
                 "ocr_confidence": None,
                 "message": "OCR preview currently supports receipt images; PDF files can still be stored.",
             }
+        result.update(await extract_items(content, job["mime_type"], result["ocr_text"], result.get("suggested_amount")))
         await db.ocr_preview_jobs.update_one(
             {"_id": job["_id"], "status": "processing"},
             {"$set": {"status": "completed", "result": result, "completed_at": utcnow(),

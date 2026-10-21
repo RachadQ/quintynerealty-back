@@ -24,6 +24,7 @@ from app.security import require_permission
 from app.services.drive import DriveStorage
 from app.services import onedrive
 from app.services.ocr import extract_text, suggested_total, suggested_vendor, suggested_hst
+from app.services.receipt_items import parse_items, selected_total
 from app.services.receipt_jobs import enqueue_preview_job, process_preview_job_by_id
 
 router = APIRouter(prefix="/receipts", tags=["receipts"])
@@ -264,11 +265,13 @@ def _safe_filename(filename: str) -> str:
 async def upload_receipt(
     file: UploadFile = File(...), category: str = Form("other"), document_type: str = Form("receipt"),
     transaction_type: str = Form("expense"), incurred_at: date = Form(default_factory=date.today),
-    amount: float | None = Form(None), vendor: str | None = Form(None), currency: str = Form("CAD"),
+    amount: float | None = Form(None, ge=0, allow_inf_nan=False), vendor: str | None = Form(None), currency: str = Form("CAD"),
     vehicle_id: UUID | None = Form(None), fuel_litres: float | None = Form(None),
     hst_amount: float | None = Form(None, ge=0, allow_inf_nan=False),
     hst_reviewed: bool = Form(False),
     business_activity: BusinessActivity = Form("other"),
+    line_items: str | None = Form(None),
+    receipt_total: float | None = Form(None, ge=0, allow_inf_nan=False),
     ocr_text_override: str | None = Form(None),
     actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
@@ -297,8 +300,20 @@ async def upload_receipt(
     detected_vendor = suggested_vendor(ocr_text)
     recorded_amount = amount if amount is not None else detected_amount
     recorded_hst = hst_amount if hst_amount is not None else (None if hst_reviewed else suggested_hst(ocr_text))
+    reviewed_items = None
+    if line_items is not None:
+        try:
+            reviewed_items = parse_items(line_items)
+        except ValueError:
+            raise HTTPException(422, "Invalid receipt items") from None
+        if reviewed_items:
+            recorded_amount = selected_total(reviewed_items)
+            if recorded_amount < 0:
+                raise HTTPException(422, "Selected business total cannot be negative")
+            if recorded_hst is not None and recorded_hst > recorded_amount:
+                raise HTTPException(422, "Business HST cannot exceed selected business total")
     if recorded_hst is not None and recorded_amount is not None and recorded_hst > recorded_amount:
-        raise HTTPException(422, "HST cannot exceed the receipt total")
+        raise HTTPException(422, "HST cannot exceed the business total")
     year = str(incurred_at.year)
     drive_data: dict[str, str] = {}
     storage_provider = "local"
@@ -322,7 +337,7 @@ async def upload_receipt(
     cleaned_currency = "CAD" if not currency or currency.upper()[:3] == "CHF" else currency.upper()[:3]
     document = {
         "_id": uuid4(), "document_type": document_type, "transaction_type": transaction_type,
-        "business_activity": business_activity,
+        "business_activity": business_activity, "line_items": reviewed_items, "receipt_total": receipt_total,
         "category": category, "vendor": vendor or detected_vendor, "amount": recorded_amount, "hst_amount": round(recorded_hst, 2) if recorded_hst is not None else None,
         "currency": cleaned_currency, "incurred_at": datetime.combine(incurred_at, time.min, tzinfo=timezone.utc),
         "filename": filename, "mime_type": file.content_type, "size_bytes": len(content), "ocr_text": ocr_text,
@@ -339,11 +354,13 @@ async def upload_receipt(
 async def upload_receipt_from_preview(
     job_id: UUID, category: str = Form("other"), document_type: str = Form("receipt"),
     transaction_type: str = Form("expense"), incurred_at: date = Form(default_factory=date.today),
-    amount: float | None = Form(None), vendor: str | None = Form(None), currency: str = Form("CAD"),
+    amount: float | None = Form(None, ge=0, allow_inf_nan=False), vendor: str | None = Form(None), currency: str = Form("CAD"),
     vehicle_id: UUID | None = Form(None), fuel_litres: float | None = Form(None),
     hst_amount: float | None = Form(None, ge=0, allow_inf_nan=False),
     hst_reviewed: bool = Form(False),
     business_activity: BusinessActivity = Form("other"),
+    line_items: str | None = Form(None),
+    receipt_total: float | None = Form(None, ge=0, allow_inf_nan=False),
     ocr_text_override: str | None = Form(None),
     actor: dict = Depends(require_permission("RECEIPTS_CREATE")),
 ):
@@ -373,7 +390,7 @@ async def upload_receipt_from_preview(
             vendor=vendor, currency=currency,
             vehicle_id=vehicle_id, fuel_litres=fuel_litres,
             business_activity=business_activity, hst_amount=hst_amount, hst_reviewed=hst_reviewed,
-            ocr_text_override=reviewed_text, actor=actor,
+            ocr_text_override=reviewed_text, line_items=line_items, receipt_total=receipt_total, actor=actor,
         )
     except Exception:
         await db.ocr_preview_jobs.update_one(

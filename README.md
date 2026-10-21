@@ -165,3 +165,23 @@ For the deployed backend set `FRONTEND_URL=https://quintynerealty.vercel.app`, `
 Reference: https://developers.google.com/identity/sign-in/web/backend-auth.
 
 For Vercel OneDrive connections set `MICROSOFT_REDIRECT_URI=https://quintynerealty-back.vercel.app/auth/microsoft/callback` in the backend environment and register that exact URL as a Web redirect URI in Microsoft Entra. Production callbacks must use HTTPS and an allowed backend hostname. `/storage/onedrive/status` reports configuration problems in its JSON rather than treating an invalid callback URL as an unavailable app. Actual storage/database failures still return errors.
+
+
+### Receipt model routing
+
+Configure `GEMINI_API_KEY` (alias `GEMINI_API`) and `GEMINI_RECEIPT_MODELS` in
+backend `.env`. Flash Lite handles routine extraction; Flash handles difficult
+receipts. Ordered failover handles quota errors, unavailable models, malformed
+responses and totals that disagree. Failed models cool down for 60 seconds per
+worker. Local PaddleOCR/RapidOCR and manual entry remain available.
+
+Other model roles: Embedding 1/2 for search; TTS for speech; Live for realtime
+audio; Nano Banana for images; Veo for video; Lyria for music; Antigravity and
+Deep Research for agents. Gemma and Robotics are excluded from financial
+extraction, as are models with zero quota. Verify availability with your API key.
+
+Review every line before confirmation. Uncheck personal items; add missing tax
+and discounts as separate lines. Adjust tax to the business portion and enter
+only business HST. The backend sums included lines using decimal arithmetic.
+Excluded lines, original receipt total and original document remain available.
+Reconciliation checks arithmetic and cannot guarantee correct reading.
