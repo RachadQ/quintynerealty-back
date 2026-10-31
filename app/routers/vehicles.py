@@ -80,6 +80,21 @@ def _street_tokens(value: str) -> set[str]:
     return set(street)
 
 
+def _address_label(value: str, postal_code: str = "") -> str:
+    """Keep street numbers and provider-supplied postal codes in display labels."""
+    label = re.sub(r"\s+", " ", value).strip(" ,")
+    postal = re.sub(r"\s+", " ", str(postal_code or "")).strip()
+    if postal and re.sub(r"\W", "", postal).casefold() not in re.sub(r"\W", "", label).casefold():
+        label = f"{label}, {postal}"
+    return label
+
+
+def _matches_numbered_address(query: str, label: str) -> bool:
+    number = re.match(r"^(\d+[A-Za-z]?(?:-\d+[A-Za-z]?)?)\s+", query)
+    return not number or (label.casefold().startswith(number[1].casefold() + " ")
+                          and _street_tokens(query) <= _street_tokens(label))
+
+
 class VehicleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     make: str = Field(default="", max_length=80)
@@ -259,7 +274,7 @@ async def place_suggestions(q: str, _: dict = Depends(require_permission("RECEIP
                     params={"q": provider_query, "lang": "en", "keys": "locate,fsa"},
                     timeout=httpx.Timeout(1.8, connect=1.0))
                 response.raise_for_status()
-                return [{"label": str(item["name"]), "longitude": item["lng"], "latitude": item["lat"],
+                return [{"label": _address_label(str(item["name"]), item.get("postal_code") or item.get("postcode") or ""), "longitude": item["lng"], "latitude": item["lat"],
                          "provider": "Natural Resources Canada"} for item in response.json()[:8]
                         if item.get("name") and item.get("lat") is not None and item.get("lng") is not None]
             response = await _client().get("https://photon.komoot.io/api/",
@@ -275,8 +290,8 @@ async def place_suggestions(q: str, _: dict = Depends(require_permission("RECEIP
                     continue
                 coordinates = feature.get("geometry", {}).get("coordinates", [])
                 parts = [f'{props.get("housenumber", "")} {props.get("street", "")}'.strip(),
-                         props.get("city") or props.get("district"), props.get("state")]
-                label = ", ".join(dict.fromkeys(str(part).strip() for part in parts if part))
+                         props.get("city") or props.get("district"), props.get("state"), props.get("postcode")]
+                label = _address_label(", ".join(dict.fromkeys(str(part).strip() for part in parts if part)))
                 if label and len(coordinates) == 2:
                     results.append({"label": label, "longitude": coordinates[0], "latitude": coordinates[1], "provider": "Photon"})
             return results
@@ -293,7 +308,7 @@ async def place_suggestions(q: str, _: dict = Depends(require_permission("RECEIP
             if exact:
                 suggestions = exact
                 break
-            suggestions.extend(results)
+            suggestions.extend(item for item in results if _matches_numbered_address(provider_query, item["label"]))
     except TimeoutError:
         pass
     finally:
@@ -301,7 +316,8 @@ async def place_suggestions(q: str, _: dict = Depends(require_permission("RECEIP
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-    suggestions = list({item["label"]: item for item in suggestions}.values())[:8]
+    suggestions = list({item["label"]: item for item in suggestions
+                        if _matches_numbered_address(provider_query, item["label"])}.values())[:8]
     if suggestions:
         if len(_place_cache) >= 250:
             _place_cache.pop(next(iter(_place_cache)))
