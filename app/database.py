@@ -89,6 +89,7 @@ async def ensure_indexes(db: AsyncIOMotorDatabase[Any]) -> None:
     ])
     await db.receipts.create_index([("deleted_at", ASCENDING), ("document_type", ASCENDING),
                                     ("business_activity", ASCENDING), ("incurred_at", DESCENDING)])
+    await db.vending_machines.create_index([("deleted_at", ASCENDING), ("name", ASCENDING)])
     await db.vehicles.create_indexes([
         IndexModel([("deleted_at", ASCENDING), ("name", ASCENDING)]),
         IndexModel([("deleted_at", ASCENDING), ("is_default", ASCENDING)]),

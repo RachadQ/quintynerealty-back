@@ -185,3 +185,16 @@ and discounts as separate lines. Adjust tax to the business portion and enter
 only business HST. The backend sums included lines using decimal arithmetic.
 Excluded lines, original receipt total and original document remain available.
 Reconciliation checks arithmetic and cannot guarantee correct reading.
+
+
+### Vending machine locations
+
+The Vending machines navigation opens a searchable library and Leaflet map.
+`/vending-machines` supports GET/POST, and `/{id}` supports PUT/DELETE.
+`/vending-machines/locations?q=...` reuses the existing Canadian address lookup.
+Saving resolves the address and persists latitude/longitude; failed lookups return
+422 without saving an incorrect pin. Deletion is soft and all changes are audited.
+Access follows the existing vehicle workflow: RECEIPTS_READ/CREATE/UPDATE/DELETE.
+The frontend uses OpenStreetMap tiles with attribution and Google Maps directions;
+no new API key is required. Network access is required for address lookup and tiles.
+On phones, open More > Vending machines.

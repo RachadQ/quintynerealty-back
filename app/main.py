@@ -14,6 +14,7 @@ from app.database import (DatabaseUnavailableError, close_database, connect_data
                           database_is_available, get_database)
 from app.routers.auth import router as auth_router
 from app.routers.onedrive import router as onedrive_router
+from app.routers.vending import router as vending_router
 from app.routers.rbac import router as rbac_router
 from app.routers.receipts import router as receipts_router
 from app.routers.vehicles import close_external_client, router as vehicles_router
@@ -94,6 +95,7 @@ app.include_router(rbac_router)
 app.include_router(receipts_router)
 app.include_router(vehicles_router)
 app.include_router(onedrive_router)
+app.include_router(vending_router)
 
 
 @app.get("/")
