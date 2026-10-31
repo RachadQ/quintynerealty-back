@@ -7,10 +7,9 @@ from google.oauth2 import id_token
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from app.audit import write_audit
 from app.config import get_settings
 from app.database import get_database
-from app.models import serialize, utcnow
+from app.models import serialize
 from app.security import (CSRF_COOKIE_NAME, clear_auth_cookies, create_access_token,
                           get_current_user, set_auth_cookies, user_permissions)
 
@@ -52,14 +51,8 @@ async def google_login(payload: GoogleLoginRequest, request: Request, response: 
     if not user:
         raise HTTPException(status_code=403, detail="This Google account is not enabled in the administration portal")
 
-    now = utcnow()
-    await db.users.update_one({"_id": user["_id"]}, {"$set": {"last_login_at": now}})
     token, _ = create_access_token(user["_id"], bool(user.get("is_super_admin")))
     csrf = set_auth_cookies(response, token)
-    await write_audit("LOGIN", user["_id"], "session", metadata={"provider": "google"})
-    await db.login_activity_logs.insert_one({
-        "user_id": user["_id"], "provider": "google", "created_at": now,
-    })
     clean = {key: value for key, value in user.items() if key != "token_payload"}
     return {"success": True, "user": serialize(clean), "permissions": sorted(await user_permissions(user)), "csrf_token": csrf}
 
@@ -90,7 +83,6 @@ async def csrf_token(request: Request, response: Response, user: dict = Depends(
 async def heartbeat(request: Request, response: Response, user: dict = Depends(get_current_user)):
     if settings.dev_auth_bypass:
         return {"status": "ok", "mode": "localhost_development", "dev_auth_bypass": True}
-    await get_database().users.update_one({"_id": user["_id"]}, {"$set": {"last_activity_at": utcnow()}})
     token, _ = create_access_token(user["_id"], bool(user.get("is_super_admin")))
     csrf = set_auth_cookies(response, token, request.cookies.get(CSRF_COOKIE_NAME))
     return {"status": "ok", "csrf_token": csrf}
@@ -109,5 +101,4 @@ async def logout(request: Request, user: dict = Depends(get_current_user)):
     payload = user["token_payload"]
     await get_database().revoked_tokens.update_one({"_id": payload["jti"]},
         {"$set": {"expires_at": datetime.fromtimestamp(payload["exp"], tz=timezone.utc)}}, upsert=True)
-    await write_audit("LOGOUT", user["_id"], "session")
     return response

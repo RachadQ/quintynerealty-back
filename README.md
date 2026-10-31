@@ -160,6 +160,8 @@ Configure `GOOGLE_OAUTH_CLIENT_ID` with the same public Web client ID used by De
 
 For the deployed backend set `FRONTEND_URL=https://quintynerealty.vercel.app`, `CORS_ALLOWED_ORIGINS=https://quintynerealty.vercel.app`, `AUTH_COOKIE_SECURE=true`, `SESSION_COOKIE_SECURE=true`, and `AUTH_COOKIE_SAMESITE=none`. Set frontend `VITE_API_URL=https://quintynerealty-back.vercel.app`. Redeploy both projects. Cross-site browser cookie restrictions may require same-site custom domains depending on browser policy.
 
+If startup reports `AUTH_COOKIE_SAMESITE: invalid value` or `expected lax, strict, or none`, set that variable to the plain text `none` in the backend deployment environment and redeploy. Do not include quotes or the `AUTH_COOKIE_SAMESITE=` prefix in the value. The backend normalizes capitalization and surrounding whitespace but rejects other values.
+
 `GET /auth/google/config` supplies the public client ID. `POST /auth/google` accepts the Google credential, validates its signature/audience/expiry with Google's verification library, checks verified email and exact Origin, and permits only active users in the existing users collection. Sign-in issues the app's cookies, returns the CSRF token, and writes login/audit records. Bootstrap/heartbeat return the CSRF token so the frontend can authenticate mutations across origins; heartbeat preserves that token. Google sign-in does not alter the OneDrive connection.
 
 Reference: https://developers.google.com/identity/sign-in/web/backend-auth.
@@ -202,3 +204,13 @@ GOOGLE_MAPS_API_KEY in the frontend and deployment environment. Enable Maps
 JavaScript API, Places API (New), and Geocoding API; restrict the browser key to
 your website referrers. No server Maps key is required. See the frontend README.
 On phones, open More > Vending machines.
+
+
+### Login history privacy
+
+The app does not write login/logout audit events, per-user login history, or
+last-login/last-activity timestamps. On database startup, existing LOGIN/LOGOUT
+audit events, login_activity_logs records, and those two user timestamps are
+removed. Business audit events remain. Authentication, cookie/CSRF protections,
+permissions, expiring tokens, and logout token revocation remain enforced.
+This does not control Google sign-in logs, hosting logs, backups, or browser history.

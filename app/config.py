@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     google_drive_root_folder_id: str = ""
     local_upload_directory: str = "uploads"
 
+    @field_validator("auth_cookie_samesite", mode="before")
+    @classmethod
+    def normalize_cookie_samesite(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
     @field_validator("mongodb_uri")
     @classmethod
     def validate_mongodb_uri(cls, value: str) -> str:
@@ -139,6 +146,8 @@ def get_settings() -> Settings:
                     reason += "; separate multiple origins with commas"
             elif kind == "bool_parsing":
                 reason = "expected true or false"
+            elif field == "AUTH_COOKIE_SAMESITE":
+                reason = "expected lax, strict, or none"
             else:
                 reason = "invalid value (" + kind + ")"
             reasons.append(field + ": " + reason)

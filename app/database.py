@@ -60,6 +60,14 @@ def database_is_available() -> bool:
     return _database is not None
 
 
+async def remove_login_history(db: AsyncIOMotorDatabase[Any]) -> None:
+    # Login-history removal requested by the owner. Keep business audit events and
+    # token revocations; remove only authentication history and presence timestamps.
+    await db.login_activity_logs.delete_many({})
+    await db.audit_logs.delete_many({"action": {"$in": ["LOGIN", "LOGOUT"]}})
+    await db.users.update_many({}, {"$unset": {"last_login_at": "", "last_activity_at": ""}})
+
+
 async def ensure_indexes(db: AsyncIOMotorDatabase[Any]) -> None:
     await db.users.create_indexes([
         IndexModel([("email", ASCENDING)], unique=True),
@@ -70,10 +78,7 @@ async def ensure_indexes(db: AsyncIOMotorDatabase[Any]) -> None:
         IndexModel([("is_active", ASCENDING)]),
     ])
     await db.audit_logs.create_index([("created_at", DESCENDING)])
-    await db.login_activity_logs.create_indexes([
-        IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)]),
-        IndexModel([("created_at", DESCENDING)]),
-    ])
+    await remove_login_history(db)
     await db.revoked_tokens.create_index("expires_at", expireAfterSeconds=0)
     await db.receipts.create_indexes([
         IndexModel([("deleted_at", ASCENDING), ("incurred_at", DESCENDING)]),

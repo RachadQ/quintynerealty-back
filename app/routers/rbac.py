@@ -92,5 +92,5 @@ async def update_role(role_id: UUID, payload: RoleUpdate, actor: dict = Depends(
 @router.get("/audit-logs")
 async def audit_logs(limit: int = 100, _: dict = Depends(require_permission("AUDIT_LOG_READ"))):
     limit = max(1, min(limit, 500))
-    return [serialize(item) async for item in get_database().audit_logs.find({}).sort("created_at", -1).limit(limit)]
+    return [serialize(item) async for item in get_database().audit_logs.find({"action": {"$nin": ["LOGIN", "LOGOUT"]}}).sort("created_at", -1).limit(limit)]
 
