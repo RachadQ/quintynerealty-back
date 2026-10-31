@@ -189,7 +189,7 @@ Reconciliation checks arithmetic and cannot guarantee correct reading.
 
 ### Vending machine locations
 
-The Vending machines navigation opens a searchable library and Leaflet map.
+The Vending machines navigation opens a searchable library and Google map.
 `/vending-machines` supports GET/POST, and `/{id}` supports PUT/DELETE.
 `/vending-machines/locations?q=...` reuses the existing Canadian address lookup.
 Saving attempts address lookup and persists latitude/longitude when matched. If
@@ -197,6 +197,8 @@ lookup has no exact match, the machine saves with its full entered address and
 `location_status=needs_pin`, without inventing coordinates. Optional paired
 latitude/longitude values place a manually selected pin (`location_status=manual`). Deletion is soft and all changes are audited.
 Access follows the existing vehicle workflow: RECEIPTS_READ/CREATE/UPDATE/DELETE.
-The frontend uses OpenStreetMap tiles with attribution and Google Maps directions;
-no new API key is required. Network access is required for address lookup and tiles.
+The frontend uses Google Maps, Places Autocomplete (New), and Geocoding. Set
+GOOGLE_MAPS_API_KEY in the frontend and deployment environment. Enable Maps
+JavaScript API, Places API (New), and Geocoding API; restrict the browser key to
+your website referrers. No server Maps key is required. See the frontend README.
 On phones, open More > Vending machines.
