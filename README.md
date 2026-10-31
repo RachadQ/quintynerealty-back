@@ -192,8 +192,10 @@ Reconciliation checks arithmetic and cannot guarantee correct reading.
 The Vending machines navigation opens a searchable library and Leaflet map.
 `/vending-machines` supports GET/POST, and `/{id}` supports PUT/DELETE.
 `/vending-machines/locations?q=...` reuses the existing Canadian address lookup.
-Saving resolves the address and persists latitude/longitude; failed lookups return
-422 without saving an incorrect pin. Deletion is soft and all changes are audited.
+Saving attempts address lookup and persists latitude/longitude when matched. If
+lookup has no exact match, the machine saves with its full entered address and
+`location_status=needs_pin`, without inventing coordinates. Optional paired
+latitude/longitude values place a manually selected pin (`location_status=manual`). Deletion is soft and all changes are audited.
 Access follows the existing vehicle workflow: RECEIPTS_READ/CREATE/UPDATE/DELETE.
 The frontend uses OpenStreetMap tiles with attribution and Google Maps directions;
 no new API key is required. Network access is required for address lookup and tiles.

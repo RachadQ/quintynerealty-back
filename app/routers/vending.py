@@ -2,7 +2,7 @@
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pymongo import ReturnDocument
 
 from app.audit import write_audit
@@ -19,6 +19,14 @@ class MachineInput(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     address: str = Field(min_length=5, max_length=200)
     notes: str = Field(default="", max_length=1000)
+    latitude: float | None = Field(default=None, ge=-90, le=90, allow_inf_nan=False)
+    longitude: float | None = Field(default=None, ge=-180, le=180, allow_inf_nan=False)
+
+    @model_validator(mode="after")
+    def coordinate_pair(self):
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("Latitude and longitude must be supplied together")
+        return self
 
 
 @router.get("")
@@ -34,11 +42,22 @@ async def lookup_address(q: str = Query(min_length=3, max_length=200),
 
 
 async def location_fields(payload: MachineInput) -> dict:
-    longitude, latitude, label = await _geocode(_client(), payload.address)
+    fields = {**payload.model_dump(), "updated_at": utcnow()}
+    if payload.latitude is not None and payload.longitude is not None:
+        return {**fields, "resolved_address": payload.address, "location_status": "manual"}
+    try:
+        longitude, latitude, label = await _geocode(_client(), payload.address)
+    except HTTPException as exc:
+        if exc.status_code != 422:
+            raise
+        # A geocoder's missing coverage must not prevent saving a real machine.
+        return {**fields, "latitude": None, "longitude": None,
+                "resolved_address": None, "location_status": "needs_pin"}
     if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-        raise HTTPException(502, "Address lookup returned an invalid location. Try a more complete address.")
-    return {**payload.model_dump(), "latitude": latitude, "longitude": longitude,
-            "resolved_address": label, "updated_at": utcnow()}
+        return {**fields, "latitude": None, "longitude": None,
+                "resolved_address": None, "location_status": "needs_pin"}
+    return {**fields, "latitude": latitude, "longitude": longitude,
+            "resolved_address": label, "location_status": "matched"}
 
 
 @router.post("", status_code=201)
